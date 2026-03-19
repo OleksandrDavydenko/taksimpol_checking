@@ -1,71 +1,39 @@
 from __future__ import annotations
 
-from pathlib import Path
-import tempfile
-
 import pandas as pd
 import streamlit as st
 
 from api_reader import TABLE_NAME
-from index import build_api_mapping, compare_and_enrich
-from api_reader import read_powerbi_table
-from pdf_reader import extract_pdf_to_dataframe
-
-
-DEFAULT_SCALE = 2.0
-DEFAULT_ROTATION = 270
-DEFAULT_AUTO_ROTATE = False
-DEFAULT_PSM = 11
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_api_map(table_name: str) -> pd.DataFrame:
-    api_df = read_powerbi_table(table_name)
-    if api_df.empty:
-        return pd.DataFrame()
-    return build_api_mapping(api_df)
+from reconciliation import (
+    DEFAULT_OCR_SETTINGS,
+    run_reconciliation_from_pdf_bytes,
+    summarize_result,
+)
 
 
 def analyze_pdf(
     pdf_bytes: bytes,
     table_name: str,
-    scale: float,
-    rotation: int,
-    auto_rotate: bool,
-    psm: int,
 ) -> tuple[pd.DataFrame, str | None]:
-    temp_path: Path | None = None
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            tmp.write(pdf_bytes)
-            temp_path = Path(tmp.name)
-
-        pdf_df = extract_pdf_to_dataframe(
-            pdf_path=temp_path,
-            scale=scale,
-            rotation=rotation,
-            auto_rotate=auto_rotate,
-            psm=psm,
+        result_df = run_reconciliation_from_pdf_bytes(
+            pdf_bytes=pdf_bytes,
+            table_name=table_name,
+            ocr=DEFAULT_OCR_SETTINGS,
         )
-        if pdf_df.empty:
-            return pd.DataFrame(), "Не вдалося витягнути рядки з PDF."
-
-        api_map = fetch_api_map(table_name)
-        if api_map.empty:
-            return pd.DataFrame(), "API не повернуло дані для звірки."
-
-        result_df = compare_and_enrich(pdf_df, api_map)
+        if result_df.empty:
+            return (
+                pd.DataFrame(),
+                "Не вдалося витягнути рядки з PDF або API не повернуло дані для звірки.",
+            )
         return result_df, None
     except Exception as error:
         return pd.DataFrame(), f"Помилка під час аналізу: {error}"
-    finally:
-        if temp_path and temp_path.exists():
-            temp_path.unlink(missing_ok=True)
 
 
 def main() -> None:
     st.set_page_config(page_title="PDF vs API звірка", layout="wide")
-    st.title("Звірка PDF з даними Power BI API")
+    st.title("Звірка TAKSIMPOL з даними обліку")
     st.caption("Завантажте PDF, програма витягне MAWB/суму, звірить з API та покаже результат.")
 
     uploaded_file = st.file_uploader("PDF файл", type=["pdf"])
@@ -79,19 +47,16 @@ def main() -> None:
             result_df, error_message = analyze_pdf(
                 pdf_bytes=uploaded_file.getvalue(),
                 table_name=TABLE_NAME,
-                scale=DEFAULT_SCALE,
-                rotation=DEFAULT_ROTATION,
-                auto_rotate=DEFAULT_AUTO_ROTATE,
-                psm=DEFAULT_PSM,
             )
 
         if error_message:
             st.error(error_message)
             return
 
-        total_count = len(result_df)
-        found_count = int(result_df["found_in_api"].sum())
-        amount_match_count = int(result_df["amount_match"].sum())
+        summary = summarize_result(result_df)
+        total_count = summary["total"]
+        found_count = summary["found_in_api"]
+        amount_match_count = summary["amount_match"]
 
         col1, col2, col3 = st.columns(3)
         col1.metric("Всього рядків", total_count)

@@ -2,6 +2,14 @@
 
 Compare values extracted from PDF against rows from Power BI API.
 
+## Project structure
+
+- `reconciliation.py` - core business logic (mapping, comparison, summary, orchestration).
+- `api_reader.py` - Power BI API authentication and query execution.
+- `pdf_reader.py` - OCR extraction of `inc(a)` and `MAWB` from PDF.
+- `cli.py` - command-line entry point.
+- `streamlit_app.py` - web UI for upload and reconciliation.
+
 ## Streamlit app
 
 Install dependencies:
@@ -26,7 +34,7 @@ Flow in app:
 ## Run
 
 ```bash
-python index.py
+python cli.py
 ```
 
 Optional arguments:
@@ -49,5 +57,5 @@ Example:
 
 ```bash
 export PBI_PASSWORD='your_password'
-python index.py
+python cli.py
 ```
