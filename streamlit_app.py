@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from io import BytesIO
+
 import pandas as pd
 import streamlit as st
 
@@ -9,6 +11,13 @@ from reconciliation import (
     run_reconciliation_from_pdf_bytes,
     summarize_result,
 )
+
+
+def build_excel_bytes(df: pd.DataFrame) -> bytes:
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="result", index=False)
+    return output.getvalue()
 
 
 def analyze_pdf(
@@ -74,12 +83,12 @@ def main() -> None:
         st.subheader("Повний результат")
         st.dataframe(result_df, use_container_width=True, height=450)
 
-        csv_data = result_df.to_csv(index=False).encode("utf-8")
+        excel_data = build_excel_bytes(result_df)
         st.download_button(
-            label="Завантажити результат (CSV)",
-            data=csv_data,
-            file_name="pdf_vs_api_result.csv",
-            mime="text/csv",
+            label="Завантажити результат (XLSX)",
+            data=excel_data,
+            file_name="pdf_vs_api_result.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
 
