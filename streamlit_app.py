@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 from io import BytesIO
+from pathlib import Path
+import tempfile
 
 import pandas as pd
+import requests
 import streamlit as st
 
-from api_reader import TABLE_NAME
+from api_reader import TABLE_NAME, read_powerbi_table
+from pdf_reader import extract_pdf_to_dataframe
 from reconciliation import (
     DEFAULT_OCR_SETTINGS,
-    run_reconciliation_from_pdf_bytes,
+    build_api_mapping,
+    compare_and_enrich,
     summarize_result,
 )
 
@@ -24,20 +29,52 @@ def analyze_pdf(
     pdf_bytes: bytes,
     table_name: str,
 ) -> tuple[pd.DataFrame, str | None]:
+    temp_path: Path | None = None
     try:
-        result_df = run_reconciliation_from_pdf_bytes(
-            pdf_bytes=pdf_bytes,
-            table_name=table_name,
-            ocr=DEFAULT_OCR_SETTINGS,
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(pdf_bytes)
+            temp_path = Path(tmp.name)
+
+        pdf_df = extract_pdf_to_dataframe(
+            pdf_path=temp_path,
+            scale=DEFAULT_OCR_SETTINGS.scale,
+            rotation=DEFAULT_OCR_SETTINGS.rotation,
+            auto_rotate=DEFAULT_OCR_SETTINGS.auto_rotate,
+            psm=DEFAULT_OCR_SETTINGS.psm,
         )
-        if result_df.empty:
+        if pdf_df.empty:
             return (
                 pd.DataFrame(),
-                "Не вдалося витягнути рядки з PDF або API не повернуло дані для звірки.",
+                "Не вдалося витягнути рядки з PDF. Перевірте формат файлу або якість скану.",
             )
+
+        try:
+            api_df = read_powerbi_table(table_name)
+        except RuntimeError as error:
+            return pd.DataFrame(), f"Помилка налаштування API: {error}"
+        except requests.HTTPError:
+            return (
+                pd.DataFrame(),
+                "Помилка запиту до Power BI API (авторизація або доступ до dataset).",
+            )
+        except requests.RequestException as error:
+            return pd.DataFrame(), f"Помилка мережі при зверненні до API: {error}"
+
+        if api_df.empty:
+            return pd.DataFrame(), "Power BI API повернуло 0 рядків для звірки."
+
+        try:
+            api_map = build_api_mapping(api_df)
+        except ValueError as error:
+            return pd.DataFrame(), f"Некоректна структура даних API: {error}"
+
+        result_df = compare_and_enrich(pdf_df, api_map)
         return result_df, None
     except Exception as error:
         return pd.DataFrame(), f"Помилка під час аналізу: {error}"
+    finally:
+        if temp_path and temp_path.exists():
+            temp_path.unlink(missing_ok=True)
 
 
 def main() -> None:
