@@ -14,7 +14,7 @@ from pdf_reader import extract_pdf_to_dataframe
 class OcrSettings:
     scale: float = 2.0
     rotation: int = 270
-    auto_rotate: bool = False
+    auto_rotate: bool = True
     psm: int = 11
 
 

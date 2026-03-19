@@ -76,20 +76,41 @@ def run_ocr(image, psm: int = 11) -> list[dict[str, float | str]]:
     return tokens
 
 
-def choose_best_orientation(image, rotation: int, auto_rotate: bool, psm: int):
+def choose_best_orientation(
+    image,
+    rotation: int,
+    auto_rotate: bool,
+    psm: int,
+) -> tuple[list[dict[str, float | str]], int]:
     primary = run_ocr(image.rotate(rotation, expand=True), psm=psm)
     if not auto_rotate:
-        return primary
+        return primary, rotation
 
-    has_inc = any(
-        token["norm"] in {"inc(a)", "inca", "inc(a", "inc"} for token in primary
-    )
-    has_mawb = any("mawb" in str(token["norm"]) for token in primary)
-    if has_inc and has_mawb:
-        return primary
+    rotations = [rotation, 0, 90, 180, 270]
+    checked_rotations: list[int] = []
+    candidates: list[tuple[int, int, list[dict[str, float | str]], int]] = []
 
-    fallback_rotation = 90 if rotation == 270 else 270
-    return run_ocr(image.rotate(fallback_rotation, expand=True), psm=psm)
+    for candidate_rotation in rotations:
+        if candidate_rotation in checked_rotations:
+            continue
+        checked_rotations.append(candidate_rotation)
+
+        tokens = primary if candidate_rotation == rotation else run_ocr(
+            image.rotate(candidate_rotation, expand=True),
+            psm=psm,
+        )
+
+        inc_hits = sum(
+            token["norm"] in {"inc(a)", "inca", "inc(a", "inc"}
+            for token in tokens
+        )
+        mawb_hits = sum("mawb" in str(token["norm"]) for token in tokens)
+        score = inc_hits + mawb_hits
+        candidates.append((score, mawb_hits, tokens, candidate_rotation))
+
+    # Prefer orientation with stronger header signal, especially MAWB hits.
+    best = max(candidates, key=lambda item: (item[0], item[1]))
+    return best[2], best[3]
 
 
 def extract_inc_and_mawb_from_tokens(
@@ -228,31 +249,58 @@ def extract_pdf_to_dataframe(
 ) -> pd.DataFrame:
     document = pdfium.PdfDocument(str(pdf_path))
     rows: list[dict[str, object]] = []
+    detected_rotation = rotation
 
     for page_index in range(len(document)):
         page = document[page_index]
         image = page.render(scale=scale).to_pil()
-        tokens = choose_best_orientation(
-            image=image,
-            rotation=rotation,
-            auto_rotate=auto_rotate,
-            psm=psm,
-        )
+
+        if auto_rotate and page_index == 0:
+            tokens, detected_rotation = choose_best_orientation(
+                image=image,
+                rotation=rotation,
+                auto_rotate=True,
+                psm=psm,
+            )
+        else:
+            tokens = run_ocr(
+                image.rotate(detected_rotation, expand=True),
+                psm=psm,
+            )
+
         rows.extend(extract_inc_and_mawb_from_tokens(tokens, page_index + 1))
 
     if not rows:
         # Fallback for settlement-style PDFs where row text is better recognized
         # as whole lines than as column headers/tokens.
+        fallback_rotation = rotation
         for page_index in range(len(document)):
             page = document[page_index]
-            image = page.render(scale=max(scale, 4.0)).to_pil().rotate(rotation, expand=True)
-            text = pytesseract.image_to_string(
-                image,
-                lang="eng",
-                config="--oem 3 --psm 4",
-                timeout=40,
-            )
-            rows.extend(extract_settlement_rows_from_text(text, page_index + 1))
+            base_image = page.render(scale=max(scale, 4.0)).to_pil()
+
+            rotations = [fallback_rotation]
+            if auto_rotate and page_index == 0:
+                for candidate_rotation in (0, 90, 180, 270):
+                    if candidate_rotation not in rotations:
+                        rotations.append(candidate_rotation)
+
+            page_rows: list[dict[str, object]] = []
+            best_rotation = fallback_rotation
+            for candidate_rotation in rotations:
+                text = pytesseract.image_to_string(
+                    base_image.rotate(candidate_rotation, expand=True),
+                    lang="eng",
+                    config="--oem 3 --psm 4",
+                    timeout=40,
+                )
+                candidate_rows = extract_settlement_rows_from_text(text, page_index + 1)
+                if len(candidate_rows) > len(page_rows):
+                    page_rows = candidate_rows
+                    best_rotation = candidate_rotation
+
+            fallback_rotation = best_rotation
+
+            rows.extend(page_rows)
 
     if not rows:
         return pd.DataFrame(columns=["inc(a)", "MAWB"])
