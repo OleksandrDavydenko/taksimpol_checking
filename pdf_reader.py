@@ -279,10 +279,9 @@ def extract_pdf_to_dataframe(
             base_image = page.render(scale=max(scale, 4.0)).to_pil()
 
             rotations = [fallback_rotation]
-            if auto_rotate and page_index == 0:
-                for candidate_rotation in (0, 90, 180, 270):
-                    if candidate_rotation not in rotations:
-                        rotations.append(candidate_rotation)
+            for candidate_rotation in (0, 90, 180, 270):
+                if candidate_rotation not in rotations:
+                    rotations.append(candidate_rotation)
 
             page_rows: list[dict[str, object]] = []
             best_rotation = fallback_rotation
