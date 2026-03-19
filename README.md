@@ -24,6 +24,11 @@ Run app:
 streamlit run streamlit_app.py
 ```
 
+Streamlit Cloud notes:
+
+- Python dependencies are installed from [requirements.txt](requirements.txt).
+- System OCR packages are installed from [packages.txt](packages.txt).
+
 Flow in app:
 
 - Upload PDF file.
