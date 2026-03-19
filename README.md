@@ -28,6 +28,7 @@ Streamlit Cloud notes:
 
 - Python dependencies are installed from [requirements.txt](requirements.txt).
 - System OCR packages are installed from [packages.txt](packages.txt).
+- Python runtime is pinned in [runtime.txt](runtime.txt) to avoid 3.14 compatibility issues.
 
 Flow in app:
 

@@ -1,6 +1,6 @@
 pandas
 requests
-streamlit
+streamlit==1.55.0
 altair<5
 pypdfium2
 pytesseract
