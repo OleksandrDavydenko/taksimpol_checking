@@ -12,6 +12,14 @@ import pytesseract
 from pytesseract import Output
 
 
+SETTLEMENT_LINE_PATTERN = re.compile(
+    r"(?P<deal>\d{3,5}/C/\d{4}).*?"
+    r"(?P<date>\d{2}\.\d{2}\.\d{4}).*?"
+    r"(?P<amount>\d{2,5}[\.,]\d{2}).*?"
+    r"(?P<mawb>\d{3}\s+\d{4}\s+\d{4})"
+)
+
+
 
 def find_pdf_in_directory(directory: Path) -> Path:
     pdf_files = sorted(directory.glob("*.pdf"))
@@ -187,6 +195,30 @@ def extract_inc_and_mawb_from_tokens(
     return extracted_rows
 
 
+def extract_settlement_rows_from_text(text: str, page_number: int) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for line in text.splitlines():
+        line_upper = line.upper()
+        match = SETTLEMENT_LINE_PATTERN.search(line_upper)
+        if not match:
+            continue
+
+        amount_raw = match.group("amount").replace(",", ".")
+        mawb_value = re.sub(r"\D", "", match.group("mawb"))
+        if len(mawb_value) != 11:
+            continue
+
+        rows.append(
+            {
+                "page": page_number,
+                "inc(a)": amount_raw,
+                "MAWB": mawb_value,
+            }
+        )
+
+    return rows
+
+
 def extract_pdf_to_dataframe(
     pdf_path: Path,
     scale: float = 2.0,
@@ -207,6 +239,20 @@ def extract_pdf_to_dataframe(
             psm=psm,
         )
         rows.extend(extract_inc_and_mawb_from_tokens(tokens, page_index + 1))
+
+    if not rows:
+        # Fallback for settlement-style PDFs where row text is better recognized
+        # as whole lines than as column headers/tokens.
+        for page_index in range(len(document)):
+            page = document[page_index]
+            image = page.render(scale=max(scale, 4.0)).to_pil().rotate(rotation, expand=True)
+            text = pytesseract.image_to_string(
+                image,
+                lang="eng",
+                config="--oem 3 --psm 4",
+                timeout=40,
+            )
+            rows.extend(extract_settlement_rows_from_text(text, page_index + 1))
 
     if not rows:
         return pd.DataFrame(columns=["inc(a)", "MAWB"])
