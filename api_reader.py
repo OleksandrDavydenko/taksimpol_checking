@@ -23,6 +23,8 @@ def normalize_column_name(name: str) -> str:
 
 
 def get_token() -> str:
+    if not USERNAME:
+        raise RuntimeError("PBI_USERNAME is empty. Set it in environment variables.")
     if not PASSWORD:
         raise RuntimeError("PBI_PASSWORD is empty. Set it in environment variables.")
 

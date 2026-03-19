@@ -45,7 +45,7 @@ Optional arguments:
 
 ## Power BI API settings
 
-The script uses environment variables (defaults are already set in code):
+The script uses environment variables:
 
 - `PBI_CLIENT_ID`
 - `PBI_USERNAME`
@@ -53,9 +53,18 @@ The script uses environment variables (defaults are already set in code):
 - `PBI_DATASET_ID`
 - `PBI_TABLE`
 
-Example:
+Local terminal example:
 
 ```bash
+export PBI_USERNAME='your_username'
 export PBI_PASSWORD='your_password'
 python cli.py
 ```
+
+For Streamlit Cloud, set these keys in app Secrets:
+
+- `PBI_CLIENT_ID`
+- `PBI_USERNAME`
+- `PBI_PASSWORD`
+- `PBI_DATASET_ID`
+- `PBI_TABLE`
