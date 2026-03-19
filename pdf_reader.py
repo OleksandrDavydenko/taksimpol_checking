@@ -15,7 +15,7 @@ from pytesseract import Output
 SETTLEMENT_LINE_PATTERN = re.compile(
     r"(?P<deal>\d{3,5}/C/\d{4}).*?"
     r"(?P<date>\d{2}\.\d{2}\.\d{4}).*?"
-    r"(?P<amount>\d{2,5}[\.,]\d{2}).*?"
+    r"(?P<amount>(?:\d{1,3}(?:[\s\u00A0,\.]\d{3})+|\d+)[\.,]\d{2}).*?"
     r"(?P<mawb>\d{3}\s+\d{4}\s+\d{4})"
 )
 
@@ -224,7 +224,22 @@ def extract_settlement_rows_from_text(text: str, page_number: int) -> list[dict[
         if not match:
             continue
 
-        amount_raw = match.group("amount").replace(",", ".")
+        raw_amount = re.sub(r"\s+", "", match.group("amount"))
+        if "," in raw_amount and "." in raw_amount:
+            decimal_sep = "," if raw_amount.rfind(",") > raw_amount.rfind(".") else "."
+            thousands_sep = "." if decimal_sep == "," else ","
+            normalized_amount = raw_amount.replace(thousands_sep, "")
+            normalized_amount = normalized_amount.replace(decimal_sep, ".")
+        elif "," in raw_amount:
+            normalized_amount = raw_amount.replace(".", "")
+            normalized_amount = normalized_amount.replace(",", ".")
+        else:
+            if raw_amount.count(".") > 1:
+                parts = raw_amount.split(".")
+                normalized_amount = "".join(parts[:-1]) + "." + parts[-1]
+            else:
+                normalized_amount = raw_amount
+
         mawb_value = re.sub(r"\D", "", match.group("mawb"))
         if len(mawb_value) != 11:
             continue
@@ -232,7 +247,7 @@ def extract_settlement_rows_from_text(text: str, page_number: int) -> list[dict[
         rows.append(
             {
                 "page": page_number,
-                "inc(a)": amount_raw,
+                "inc(a)": normalized_amount,
                 "MAWB": mawb_value,
             }
         )
@@ -274,14 +289,16 @@ def extract_pdf_to_dataframe(
         # Fallback for settlement-style PDFs where row text is better recognized
         # as whole lines than as column headers/tokens.
         fallback_rotation = rotation
+        fallback_scale = max(scale, 3.0)
         for page_index in range(len(document)):
             page = document[page_index]
-            base_image = page.render(scale=max(scale, 4.0)).to_pil()
+            base_image = page.render(scale=fallback_scale).to_pil()
 
             rotations = [fallback_rotation]
-            for candidate_rotation in (0, 90, 180, 270):
-                if candidate_rotation not in rotations:
-                    rotations.append(candidate_rotation)
+            if page_index == 0:
+                for candidate_rotation in (0, 90, 180, 270):
+                    if candidate_rotation not in rotations:
+                        rotations.append(candidate_rotation)
 
             page_rows: list[dict[str, object]] = []
             best_rotation = fallback_rotation
@@ -296,6 +313,23 @@ def extract_pdf_to_dataframe(
                 if len(candidate_rows) > len(page_rows):
                     page_rows = candidate_rows
                     best_rotation = candidate_rotation
+
+            if not page_rows and page_index > 0:
+                # Recovery path: if chosen rotation produced no rows on later pages,
+                # quickly try other rotations for this page only.
+                for candidate_rotation in (0, 90, 180, 270):
+                    if candidate_rotation == fallback_rotation:
+                        continue
+                    text = pytesseract.image_to_string(
+                        base_image.rotate(candidate_rotation, expand=True),
+                        lang="eng",
+                        config="--oem 3 --psm 4",
+                        timeout=40,
+                    )
+                    candidate_rows = extract_settlement_rows_from_text(text, page_index + 1)
+                    if len(candidate_rows) > len(page_rows):
+                        page_rows = candidate_rows
+                        best_rotation = candidate_rotation
 
             fallback_rotation = best_rotation
 
