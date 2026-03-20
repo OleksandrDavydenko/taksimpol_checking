@@ -86,6 +86,16 @@ def normalize_amount_text(raw_amount: str) -> str:
     return normalized_amount
 
 
+def is_date_like_amount(value: str) -> bool:
+    # Guard against OCR confusion where date fragments (e.g. 10.07) are read as amount.
+    m = re.fullmatch(r"(\d{1,2})\.(\d{2})", (value or "").strip())
+    if not m:
+        return False
+    left = int(m.group(1))
+    right = int(m.group(2))
+    return 1 <= left <= 31 and 1 <= right <= 12
+
+
 def row_quality(rows: list[dict[str, object]]) -> tuple[int, int]:
     mawb_filled = sum(1 for row in rows if str(row.get("MAWB", "")).strip())
     return mawb_filled, len(rows)
@@ -257,6 +267,9 @@ def extract_inc_and_mawb_from_tokens(
         inc_value = normalized_amount
         mawb_value = extract_mawb_from_text(mawb_text)
 
+        if not mawb_value:
+            continue
+
         extracted_rows.append(
             {
                 "page": page_number,
@@ -324,6 +337,8 @@ def extract_settlement_rows_from_text(text: str, page_number: int) -> list[dict[
 
         mawb_group = match.group("mawb") or ""
         mawb_value = extract_mawb_from_text(mawb_group or line)
+        if not mawb_value and is_date_like_amount(normalized_amount):
+            continue
         if not mawb_value and normalized_amount in total_amounts:
             continue
 
@@ -359,6 +374,8 @@ def extract_settlement_rows_from_text(text: str, page_number: int) -> list[dict[
 
         mawb_group = match.group("mawb") or ""
         mawb_value = extract_mawb_from_text(mawb_group or match.group(0))
+        if not mawb_value and is_date_like_amount(normalized_amount):
+            continue
         if not mawb_value and normalized_amount in total_amounts:
             continue
 
@@ -382,6 +399,7 @@ def extract_table_rows_from_text(text: str, page_number: int) -> list[dict[str, 
     text_upper = text.upper().replace("|", " ")
     rows: list[dict[str, object]] = []
     seen_pairs: set[tuple[str, str]] = set()
+    amount_pattern = re.compile(r"\d{1,3}(?:[\s\u00A0,\.]\d{3})*[\.,]\d{2}")
 
     for line in text_upper.splitlines():
         if "RAZEM" in line or "TOTAL" in line or "SUMA" in line:
@@ -389,11 +407,22 @@ def extract_table_rows_from_text(text: str, page_number: int) -> list[dict[str, 
         if not re.search(r"\d{3,5}/C/\d{4}", line):
             continue
 
-        for match in TABLE_ROW_PATTERN.finditer(line):
-            amount = normalize_amount_text(match.group("amount"))
-            mawb = extract_mawb_from_text(match.group("mawb"))
+        mawb_candidates = list(DIGIT_MAWB_PATTERN.finditer(line)) + list(ALNUM_MAWB_PATTERN.finditer(line))
+        for mawb_match in sorted(mawb_candidates, key=lambda m: m.start()):
+            mawb = extract_mawb_from_text(mawb_match.group(0))
             if not mawb:
                 continue
+
+            prefix = line[:mawb_match.start()]
+            date_matches = list(re.finditer(r"\d{2}\.\d{2}\.\d{4}", prefix))
+            amount_segment = prefix[date_matches[-1].end():] if date_matches else prefix
+
+            amounts = [normalize_amount_text(m.group(0)) for m in amount_pattern.finditer(amount_segment)]
+            amounts = [value for value in amounts if not is_date_like_amount(value)]
+            if not amounts:
+                continue
+
+            amount = amounts[-1]
             key = (amount, mawb)
             if key in seen_pairs:
                 continue
