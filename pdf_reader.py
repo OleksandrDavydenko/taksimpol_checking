@@ -106,6 +106,15 @@ def row_quality(rows: list[dict[str, object]]) -> tuple[int, int]:
     return mawb_filled, len(rows)
 
 
+def dataframe_quality(df: pd.DataFrame) -> tuple[int, int, int, int]:
+    if df.empty:
+        return (0, 0, 0, 0)
+    date_like = int(df["inc(a)"].astype(str).map(is_date_like_amount).sum())
+    mawb_filled = int(df["MAWB"].astype(str).str.strip().ne("").sum())
+    non_date = len(df) - date_like
+    return (non_date, mawb_filled, -date_like, len(df))
+
+
 def run_ocr(image, psm: int = 11) -> list[dict[str, float | str]]:
     data = pytesseract.image_to_data(
         image,
@@ -490,6 +499,23 @@ def prepare_extracted_dataframe(rows: list[dict[str, object]]) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=["inc(a)", "MAWB"])
 
+    # If for the same page+amount we have both noisy alnum MAWB and a clean 11-digit MAWB,
+    # keep the clean one.
+    group_key = df["page"].astype(str) + "|" + df["inc(a)"]
+    has_digit_mawb = group_key[df["MAWB"].str.fullmatch(r"\d{11}")]
+    has_digit_mawb_set = set(has_digit_mawb.tolist())
+    drop_noisy_mask = (
+        group_key.isin(has_digit_mawb_set)
+        & ~df["MAWB"].str.fullmatch(r"\d{11}")
+        & df["MAWB"].ne("")
+    )
+    df = df[~drop_noisy_mask]
+
+    # Remove date-like pseudo-amounts caused by OCR column bleed.
+    df = df[~df["inc(a)"].astype(str).map(is_date_like_amount)]
+    if df.empty:
+        return pd.DataFrame(columns=["inc(a)", "MAWB"])
+
     key = df["page"].astype(str) + "|" + df["inc(a)"]
     keys_with_mawb = set(key[df["MAWB"].ne("")].tolist())
     df = df[~(df["MAWB"].eq("") & key.isin(keys_with_mawb))]
@@ -597,8 +623,8 @@ def extract_pdf_to_dataframe(
     primary_df = prepare_extracted_dataframe(primary_rows)
     fallback_df = prepare_extracted_dataframe(fallback_rows)
 
-    primary_score = (int(primary_df["MAWB"].ne("").sum()), len(primary_df))
-    fallback_score = (int(fallback_df["MAWB"].ne("").sum()), len(fallback_df))
+    primary_score = dataframe_quality(primary_df)
+    fallback_score = dataframe_quality(fallback_df)
 
     if fallback_score > primary_score:
         return fallback_df
