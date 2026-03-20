@@ -18,6 +18,16 @@ from reconciliation import (
 )
 
 
+def dataframe_height_for_rows(row_count: int) -> int:
+    # Keep table compact for small results and scrollable for large ones.
+    header_px = 38
+    row_px = 35
+    min_height = 140
+    max_height = 450
+    calculated = header_px + max(row_count, 1) * row_px
+    return max(min_height, min(max_height, calculated))
+
+
 def build_excel_bytes(df: pd.DataFrame) -> bytes:
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -118,7 +128,11 @@ def main() -> None:
             st.dataframe(mismatch_df, use_container_width=True)
 
         st.subheader("Повний результат")
-        st.dataframe(result_df, use_container_width=True, height=450)
+        st.dataframe(
+            result_df,
+            use_container_width=True,
+            height=dataframe_height_for_rows(len(result_df)),
+        )
 
         excel_data = build_excel_bytes(result_df)
         st.download_button(
