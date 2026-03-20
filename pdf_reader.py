@@ -226,6 +226,8 @@ def extract_inc_and_mawb_from_tokens(
 def extract_settlement_rows_from_text(text: str, page_number: int) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     text_upper = text.upper().replace("|", " ")
+    # Join OCR-broken amounts like "952\n.00" or "952 \n ,00".
+    text_upper = re.sub(r"(\d)\s+([\.,]\s*\d{2})", r"\1\2", text_upper)
     text_upper = re.sub(r"([\.,]\d)\s+(\d)", r"\1\2", text_upper)
     seen_pairs: set[tuple[str, str]] = set()
 
@@ -357,13 +359,18 @@ def extract_pdf_to_dataframe(
             page_rows: list[dict[str, object]] = []
             best_rotation = fallback_rotation
             for candidate_rotation in rotations:
-                text = pytesseract.image_to_string(
-                    base_image.rotate(candidate_rotation, expand=True),
-                    lang="eng",
-                    config="--oem 3 --psm 4",
-                    timeout=40,
-                )
-                candidate_rows = extract_settlement_rows_from_text(text, page_index + 1)
+                rotated = base_image.rotate(candidate_rotation, expand=True)
+                candidate_rows: list[dict[str, object]] = []
+                for fallback_psm in (4, 6):
+                    text = pytesseract.image_to_string(
+                        rotated,
+                        lang="eng",
+                        config=f"--oem 3 --psm {fallback_psm}",
+                        timeout=40,
+                    )
+                    parsed_rows = extract_settlement_rows_from_text(text, page_index + 1)
+                    if len(parsed_rows) > len(candidate_rows):
+                        candidate_rows = parsed_rows
                 if len(candidate_rows) > len(page_rows):
                     page_rows = candidate_rows
                     best_rotation = candidate_rotation
@@ -374,13 +381,18 @@ def extract_pdf_to_dataframe(
                 for candidate_rotation in (0, 90, 180, 270):
                     if candidate_rotation == fallback_rotation:
                         continue
-                    text = pytesseract.image_to_string(
-                        base_image.rotate(candidate_rotation, expand=True),
-                        lang="eng",
-                        config="--oem 3 --psm 4",
-                        timeout=40,
-                    )
-                    candidate_rows = extract_settlement_rows_from_text(text, page_index + 1)
+                    rotated = base_image.rotate(candidate_rotation, expand=True)
+                    candidate_rows: list[dict[str, object]] = []
+                    for fallback_psm in (4, 6):
+                        text = pytesseract.image_to_string(
+                            rotated,
+                            lang="eng",
+                            config=f"--oem 3 --psm {fallback_psm}",
+                            timeout=40,
+                        )
+                        parsed_rows = extract_settlement_rows_from_text(text, page_index + 1)
+                        if len(parsed_rows) > len(candidate_rows):
+                            candidate_rows = parsed_rows
                     if len(candidate_rows) > len(page_rows):
                         page_rows = candidate_rows
                         best_rotation = candidate_rotation
