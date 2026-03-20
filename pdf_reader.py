@@ -68,7 +68,12 @@ def extract_mawb_from_text(value: str) -> str:
 
 
 def normalize_amount_text(raw_amount: str) -> str:
-    raw_amount = re.sub(r"\s+", "", raw_amount)
+    original = (raw_amount or "").strip()
+    bleed_match = re.fullmatch(r"(\d{2})\s+(\d{3}[\.,]\d{2})", original)
+    if bleed_match and 20 <= int(bleed_match.group(1)) <= 39:
+        original = bleed_match.group(2)
+
+    raw_amount = re.sub(r"\s+", "", original)
     if "," in raw_amount and "." in raw_amount:
         decimal_sep = "," if raw_amount.rfind(",") > raw_amount.rfind(".") else "."
         thousands_sep = "." if decimal_sep == "," else ","
