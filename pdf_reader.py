@@ -247,6 +247,31 @@ def extract_settlement_rows_from_text(text: str, page_number: int) -> list[dict[
     text_upper = re.sub(r"(\d)\s+([\.,]\s*\d{2})", r"\1\2", text_upper)
     text_upper = re.sub(r"([\.,]\d)\s+(\d)", r"\1\2", text_upper)
     seen_pairs: set[tuple[str, str]] = set()
+    total_amounts: set[str] = set()
+
+    for line in text_upper.splitlines():
+        if not re.search(r"\b(RAZEM\w*|TOTAL|SUMA)\b", line):
+            continue
+        for amount_match in re.finditer(
+            r"\d{1,3}(?:[\s\u00A0,\.]\d{3})*[\.,]\d{2}",
+            line,
+        ):
+            raw_total = re.sub(r"\s+", "", amount_match.group(0))
+            if "," in raw_total and "." in raw_total:
+                decimal_sep = "," if raw_total.rfind(",") > raw_total.rfind(".") else "."
+                thousands_sep = "." if decimal_sep == "," else ","
+                normalized_total = raw_total.replace(thousands_sep, "")
+                normalized_total = normalized_total.replace(decimal_sep, ".")
+            elif "," in raw_total:
+                normalized_total = raw_total.replace(".", "")
+                normalized_total = normalized_total.replace(",", ".")
+            else:
+                if raw_total.count(".") > 1:
+                    parts = raw_total.split(".")
+                    normalized_total = "".join(parts[:-1]) + "." + parts[-1]
+                else:
+                    normalized_total = raw_total
+            total_amounts.add(normalized_total)
 
     for line in text_upper.splitlines():
         match = SETTLEMENT_LINE_PATTERN.search(line)
@@ -271,6 +296,8 @@ def extract_settlement_rows_from_text(text: str, page_number: int) -> list[dict[
 
         mawb_group = match.group("mawb") or ""
         mawb_value = extract_mawb_from_text(mawb_group or line)
+        if not mawb_value and normalized_amount in total_amounts:
+            continue
 
         row_key = (normalized_amount, mawb_value)
         if row_key in seen_pairs:
@@ -304,6 +331,8 @@ def extract_settlement_rows_from_text(text: str, page_number: int) -> list[dict[
 
         mawb_group = match.group("mawb") or ""
         mawb_value = extract_mawb_from_text(mawb_group or match.group(0))
+        if not mawb_value and normalized_amount in total_amounts:
+            continue
 
         row_key = (normalized_amount, mawb_value)
         if row_key in seen_pairs:
@@ -428,6 +457,18 @@ def extract_pdf_to_dataframe(
     df["inc(a)"] = df["inc(a)"].astype(str).str.replace(",", ".", regex=False)
     df["inc(a)"] = pd.to_numeric(df["inc(a)"], errors="coerce")
     df = df.dropna(subset=["inc(a)"])
+
+    # Remove summary-total rows (e.g. "razem") that can be OCR'd as regular data rows.
+    if len(df) >= 8:
+        total_like_indexes: list[int] = []
+        for idx in df.index[df["MAWB"].fillna("").eq("")]:
+            current_value = float(df.at[idx, "inc(a)"])
+            others_sum = float(df.loc[df.index != idx, "inc(a)"].sum())
+            if abs(others_sum - current_value) <= 0.05:
+                total_like_indexes.append(idx)
+        if total_like_indexes:
+            df = df.drop(index=total_like_indexes)
+
     df["inc(a)"] = df["inc(a)"].map(lambda value: f"{value:.2f}")
     df["MAWB"] = df["MAWB"].fillna("").astype(str).map(normalize_mawb)
     df = df[df["MAWB"].eq("") | df["MAWB"].str.fullmatch(r"\d{11}|[A-Z0-9]{8,20}")]
