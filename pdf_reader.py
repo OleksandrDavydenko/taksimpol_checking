@@ -16,14 +16,13 @@ SETTLEMENT_LINE_PATTERN = re.compile(
     r"(?P<deal>\d{3,5}/C/\d{4}).*?"
     r"(?P<date>\d{2}\.\d{2}\.\d{4}).*?"
     r"(?P<amount>(?:\d{1,3}(?:[\s\u00A0,\.]\d{3})+|\d+)[\.,]\d{2}).*?"
-    r"(?P<mawb>\d{3}\s+\d{4}\s+\d{4})"
+    r"(?P<mawb>\d{3}\s+\d{4}\s+\d{4})?"
 )
 
 SETTLEMENT_BLOCK_PATTERN = re.compile(
     r"(?P<deal>\d{3,5}/C/\d{4}).{0,120}?"
     r"(?P<date>\d{2}\.\d{2}\.\d{4}).{0,200}?"
-    r"(?P<amount>[\[\(]?\s*(?:\d{1,3}(?:[\s\u00A0,\.]\d{3})+|\d+)[\.,]\s*\d{2}).{0,120}?"
-    r"(?P<mawb>\d{3}\s+\d{4}\s+\d{4})",
+    r"(?P<amount>[\[\(]?\s*(?:\d{1,3}(?:[\s\u00A0,\.]\d{3})+|\d+)[\.,]\s*\d{2})(?:.{0,120}?(?P<mawb>\d{3}\s+\d{4}\s+\d{4}))?",
     re.DOTALL,
 )
 
@@ -208,7 +207,7 @@ def extract_inc_and_mawb_from_tokens(
 
         inc_value = normalized_amount
         mawb_digits = re.sub(r"\D", "", mawb_text)
-        if len(mawb_digits) != 11:
+        if mawb_digits and len(mawb_digits) != 11:
             continue
 
         mawb_value = mawb_digits
@@ -251,8 +250,9 @@ def extract_settlement_rows_from_text(text: str, page_number: int) -> list[dict[
             else:
                 normalized_amount = raw_amount
 
-        mawb_value = re.sub(r"\D", "", match.group("mawb"))
-        if len(mawb_value) != 11:
+        mawb_group = match.group("mawb") or ""
+        mawb_value = re.sub(r"\D", "", mawb_group)
+        if mawb_value and len(mawb_value) != 11:
             continue
 
         row_key = (normalized_amount, mawb_value)
@@ -267,9 +267,6 @@ def extract_settlement_rows_from_text(text: str, page_number: int) -> list[dict[
                 "MAWB": mawb_value,
             }
         )
-
-    if rows:
-        return rows
 
     for match in SETTLEMENT_BLOCK_PATTERN.finditer(text_upper):
         raw_amount = re.sub(r"\s+", "", match.group("amount").replace("[", "").replace("(", ""))
@@ -288,8 +285,9 @@ def extract_settlement_rows_from_text(text: str, page_number: int) -> list[dict[
             else:
                 normalized_amount = raw_amount
 
-        mawb_value = re.sub(r"\D", "", match.group("mawb"))
-        if len(mawb_value) != 11:
+        mawb_group = match.group("mawb") or ""
+        mawb_value = re.sub(r"\D", "", mawb_group)
+        if mawb_value and len(mawb_value) != 11:
             continue
 
         row_key = (normalized_amount, mawb_value)
@@ -338,10 +336,12 @@ def extract_pdf_to_dataframe(
 
         rows.extend(extract_inc_and_mawb_from_tokens(tokens, page_index + 1))
 
-    if len(rows) < 2:
-        # Fallback for settlement-style PDFs where row text is better recognized
-        # as whole lines than as column headers/tokens.
-        rows = []
+    primary_rows = rows
+
+    # Fallback for settlement-style PDFs where row text is better recognized
+    # as whole lines than as column headers/tokens.
+    fallback_rows: list[dict[str, object]] = []
+    if auto_rotate or len(primary_rows) < 8:
         fallback_rotation = rotation
         fallback_scale = max(scale, 3.0)
         for page_index in range(len(document)):
@@ -387,23 +387,31 @@ def extract_pdf_to_dataframe(
 
             fallback_rotation = best_rotation
 
-            rows.extend(page_rows)
+            fallback_rows.extend(page_rows)
+
+    rows = fallback_rows if len(fallback_rows) > len(primary_rows) else primary_rows
 
     if not rows:
         return pd.DataFrame(columns=["inc(a)", "MAWB"])
 
     df = pd.DataFrame(rows)
-    df = df[["inc(a)", "MAWB"]]
-    df = df.replace("", pd.NA).dropna(subset=["inc(a)", "MAWB"])
+    if "page" not in df.columns:
+        df["page"] = 0
+    df = df[["page", "inc(a)", "MAWB"]]
+    df = df.replace("", pd.NA)
+    df = df.dropna(subset=["inc(a)"])
     df["inc(a)"] = df["inc(a)"].astype(str).str.replace(",", ".", regex=False)
     df["inc(a)"] = pd.to_numeric(df["inc(a)"], errors="coerce")
     df = df.dropna(subset=["inc(a)"])
     df["inc(a)"] = df["inc(a)"].map(lambda value: f"{value:.2f}")
-    df["MAWB"] = df["MAWB"].astype(str).str.replace(r"\D", "", regex=True)
-    df = df[df["MAWB"].str.fullmatch(r"\d{11}")]
+    df["MAWB"] = df["MAWB"].fillna("").astype(str).str.replace(r"\D", "", regex=True)
+    df = df[df["MAWB"].eq("") | df["MAWB"].str.fullmatch(r"\d{11}")]
+    key = df["page"].astype(str) + "|" + df["inc(a)"]
+    keys_with_mawb = set(key[df["MAWB"].ne("")].tolist())
+    df = df[~(df["MAWB"].eq("") & key.isin(keys_with_mawb))]
     # OCR can duplicate the same logical row; keep unique MAWB+amount pairs.
-    df = df.drop_duplicates(subset=["MAWB", "inc(a)"], keep="first")
-    return df.reset_index(drop=True)
+    df = df.drop_duplicates(subset=["page", "MAWB", "inc(a)"], keep="first")
+    return df[["inc(a)", "MAWB"]].reset_index(drop=True)
 
 
 def main() -> int:
