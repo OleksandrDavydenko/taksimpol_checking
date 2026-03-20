@@ -14,14 +14,14 @@ from pytesseract import Output
 
 SETTLEMENT_LINE_PATTERN = re.compile(
     r"(?P<deal>\d{3,5}/C/\d{4}).*?"
-    r"(?P<date>\d{2}\.\d{2}\.\d{4}).*?"
+    r"(?P<date>\d{1,2}\.\d{2}\.\d{4}).*?"
     r"(?P<amount>(?:\d{1,3}(?:[\s\u00A0,\.]\d{3})+|\d+)[\.,]\d{2}).*?"
     r"(?P<mawb>\d{3}\s+\d{4}\s+\d{4})?"
 )
 
 SETTLEMENT_BLOCK_PATTERN = re.compile(
     r"(?P<deal>\d{3,5}/C/\d{4}).{0,120}?"
-    r"(?P<date>\d{2}\.\d{2}\.\d{4}).{0,200}?"
+    r"(?P<date>\d{1,2}\.\d{2}\.\d{4}).{0,200}?"
     r"(?P<amount>[\[\(]?\s*(?:\d{1,3}(?:[\s\u00A0,\.]\d{3})+|\d+)[\.,]\s*\d{2})(?:.{0,120}?(?P<mawb>\d{3}\s+\d{4}\s+\d{4}))?",
     re.DOTALL,
 )
@@ -429,7 +429,7 @@ def extract_table_rows_from_text(text: str, page_number: int) -> list[dict[str, 
         if not re.search(r"\d{3,5}/C/\d{4}", line):
             continue
 
-        date_matches = list(re.finditer(r"\d{2}\.\d{2}\.\d{4}", line))
+        date_matches = list(re.finditer(r"\d{1,2}\.\d{2}\.\d{4}", line))
         if not date_matches:
             continue
 
@@ -446,7 +446,7 @@ def extract_table_rows_from_text(text: str, page_number: int) -> list[dict[str, 
                     continue
 
                 prefix = line[:mawb_match.start()]
-                prefix_dates = list(re.finditer(r"\d{2}\.\d{2}\.\d{4}", prefix))
+                prefix_dates = list(re.finditer(r"\d{1,2}\.\d{2}\.\d{4}", prefix))
                 amount_segment = prefix[prefix_dates[-1].end():] if prefix_dates else prefix
                 amount_segment = re.sub(r"\d{3,5}\s*/\s*C\s*/\s*\d{4}", " ", amount_segment)
 
@@ -675,6 +675,9 @@ def extract_pdf_to_dataframe(
             other_df["MAWB"].eq("")
             & ~other_df["inc(a)"].isin(selected_df["inc(a)"])
         ]
+        if not missing_empty_rows.empty:
+            amount_values = pd.to_numeric(missing_empty_rows["inc(a)"], errors="coerce")
+            missing_empty_rows = missing_empty_rows[amount_values >= 100.0]
         if not missing_empty_rows.empty:
             selected_df = pd.concat([selected_df, missing_empty_rows], ignore_index=True)
             selected_df = selected_df.drop_duplicates(subset=["inc(a)", "MAWB"], keep="first")
