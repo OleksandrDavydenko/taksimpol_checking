@@ -430,6 +430,7 @@ def extract_table_rows_from_text(text: str, page_number: int) -> list[dict[str, 
             prefix = line[:mawb_match.start()]
             date_matches = list(re.finditer(r"\d{2}\.\d{2}\.\d{4}", prefix))
             amount_segment = prefix[date_matches[-1].end():] if date_matches else prefix
+            amount_segment = re.sub(r"\d{3,5}\s*/\s*C\s*/\s*\d{4}", " ", amount_segment)
 
             amounts = [normalize_amount_text(m.group(0)) for m in amount_pattern.finditer(amount_segment)]
             amounts = [value for value in amounts if not is_date_like_amount(value)]
