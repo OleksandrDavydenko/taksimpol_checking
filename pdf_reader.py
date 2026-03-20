@@ -469,6 +469,18 @@ def extract_pdf_to_dataframe(
         if total_like_indexes:
             df = df.drop(index=total_like_indexes)
 
+    # Safety net: drop a likely total row when it has empty MAWB and the amount
+    # is an extreme outlier compared to the next largest extracted amount.
+    if len(df) >= 8:
+        empty_mawb_df = df[df["MAWB"].fillna("").eq("")]
+        if not empty_mawb_df.empty:
+            sorted_amounts = df["inc(a)"].sort_values(ascending=False).tolist()
+            if len(sorted_amounts) >= 2:
+                max_amount = float(sorted_amounts[0])
+                second_max = float(sorted_amounts[1])
+                if second_max > 0 and max_amount >= second_max * 2.5:
+                    df = df[~(df["MAWB"].fillna("").eq("") & (df["inc(a)"] == max_amount))]
+
     df["inc(a)"] = df["inc(a)"].map(lambda value: f"{value:.2f}")
     df["MAWB"] = df["MAWB"].fillna("").astype(str).map(normalize_mawb)
     df = df[df["MAWB"].eq("") | df["MAWB"].str.fullmatch(r"\d{11}|[A-Z0-9]{8,20}")]
