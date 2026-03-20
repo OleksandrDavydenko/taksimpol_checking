@@ -430,10 +430,7 @@ def extract_table_rows_from_text(text: str, page_number: int) -> list[dict[str, 
             continue
 
         date_matches = list(re.finditer(r"\d{1,2}\.\d{2}\.\d{4}", line))
-        if not date_matches:
-            continue
-
-        post_date_segment = line[date_matches[-1].end():]
+        post_date_segment = line[date_matches[-1].end():] if date_matches else line
         post_date_segment = re.sub(r"\d{3,5}\s*/\s*C\s*/\s*\d{4}", " ", post_date_segment)
         base_amounts = [normalize_amount_text(m.group(0)) for m in amount_pattern.finditer(post_date_segment)]
         base_amounts = [value for value in base_amounts if not is_date_like_amount(value)]
@@ -476,6 +473,8 @@ def extract_table_rows_from_text(text: str, page_number: int) -> list[dict[str, 
                 seen_pairs.add(key)
                 rows.append({"page": page_number, "inc(a)": amount, "MAWB": mawb})
         else:
+            if not date_matches:
+                continue
             if not base_amounts:
                 continue
             amount = base_amounts[0]
