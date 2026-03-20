@@ -456,6 +456,11 @@ def prepare_extracted_dataframe(rows: list[dict[str, object]]) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=["inc(a)", "MAWB"])
 
+    # OCR can prepend "25" from year 2025 to values (e.g. 423.00 -> 25423.00).
+    year_bleed_mask = (df["inc(a)"] >= 25000.0) & (df["inc(a)"] < 26000.0)
+    if year_bleed_mask.any():
+        df.loc[year_bleed_mask, "inc(a)"] = df.loc[year_bleed_mask, "inc(a)"] - 25000.0
+
     # Remove summary-total rows (e.g. "razem") that can be OCR'd as regular data rows.
     if len(df) >= 8:
         total_like_indexes: list[int] = []
