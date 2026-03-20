@@ -26,6 +26,9 @@ SETTLEMENT_BLOCK_PATTERN = re.compile(
     re.DOTALL,
 )
 
+DIGIT_MAWB_PATTERN = re.compile(r"\b\d{3}\s+\d{4}\s+\d{4}\b")
+ALNUM_MAWB_PATTERN = re.compile(r"\b[A-Z]{2,5}\s+[A-Z0-9]{2,8}\s+\d{3,6}\b")
+
 
 
 def find_pdf_in_directory(directory: Path) -> Path:
@@ -40,6 +43,24 @@ def normalize_text(value: str) -> str:
     compact = compact.replace("[", "(").replace("]", ")")
     compact = compact.replace("l", "1")
     return compact
+
+
+def normalize_mawb(value: str) -> str:
+    raw = (value or "").upper()
+    return re.sub(r"[^A-Z0-9]", "", raw)
+
+
+def extract_mawb_from_text(value: str) -> str:
+    upper = (value or "").upper()
+    digit_match = DIGIT_MAWB_PATTERN.search(upper)
+    if digit_match:
+        return normalize_mawb(digit_match.group(0))
+
+    alnum_match = ALNUM_MAWB_PATTERN.search(upper)
+    if alnum_match:
+        return normalize_mawb(alnum_match.group(0))
+
+    return ""
 
 
 def run_ocr(image, psm: int = 11) -> list[dict[str, float | str]]:
@@ -206,11 +227,7 @@ def extract_inc_and_mawb_from_tokens(
                 normalized_amount = raw_amount
 
         inc_value = normalized_amount
-        mawb_digits = re.sub(r"\D", "", mawb_text)
-        if mawb_digits and len(mawb_digits) != 11:
-            continue
-
-        mawb_value = mawb_digits
+        mawb_value = extract_mawb_from_text(mawb_text)
 
         extracted_rows.append(
             {
@@ -253,9 +270,7 @@ def extract_settlement_rows_from_text(text: str, page_number: int) -> list[dict[
                 normalized_amount = raw_amount
 
         mawb_group = match.group("mawb") or ""
-        mawb_value = re.sub(r"\D", "", mawb_group)
-        if mawb_value and len(mawb_value) != 11:
-            continue
+        mawb_value = extract_mawb_from_text(mawb_group or line)
 
         row_key = (normalized_amount, mawb_value)
         if row_key in seen_pairs:
@@ -288,9 +303,7 @@ def extract_settlement_rows_from_text(text: str, page_number: int) -> list[dict[
                 normalized_amount = raw_amount
 
         mawb_group = match.group("mawb") or ""
-        mawb_value = re.sub(r"\D", "", mawb_group)
-        if mawb_value and len(mawb_value) != 11:
-            continue
+        mawb_value = extract_mawb_from_text(mawb_group or match.group(0))
 
         row_key = (normalized_amount, mawb_value)
         if row_key in seen_pairs:
@@ -416,8 +429,8 @@ def extract_pdf_to_dataframe(
     df["inc(a)"] = pd.to_numeric(df["inc(a)"], errors="coerce")
     df = df.dropna(subset=["inc(a)"])
     df["inc(a)"] = df["inc(a)"].map(lambda value: f"{value:.2f}")
-    df["MAWB"] = df["MAWB"].fillna("").astype(str).str.replace(r"\D", "", regex=True)
-    df = df[df["MAWB"].eq("") | df["MAWB"].str.fullmatch(r"\d{11}")]
+    df["MAWB"] = df["MAWB"].fillna("").astype(str).map(normalize_mawb)
+    df = df[df["MAWB"].eq("") | df["MAWB"].str.fullmatch(r"\d{11}|[A-Z0-9]{8,20}")]
     key = df["page"].astype(str) + "|" + df["inc(a)"]
     keys_with_mawb = set(key[df["MAWB"].ne("")].tolist())
     df = df[~(df["MAWB"].eq("") & key.isin(keys_with_mawb))]

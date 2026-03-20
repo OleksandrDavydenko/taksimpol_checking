@@ -21,6 +21,10 @@ class OcrSettings:
 DEFAULT_OCR_SETTINGS = OcrSettings()
 
 
+def normalize_mawb(value: object) -> str:
+    return "".join(ch for ch in str(value).upper() if ch.isalnum())
+
+
 def find_column_by_normalized_name(df: pd.DataFrame, expected_name: str) -> str | None:
     expected = normalize_column_name(expected_name)
     for column in df.columns:
@@ -50,9 +54,9 @@ def build_api_mapping(api_df: pd.DataFrame) -> pd.DataFrame:
         }
     )
     mapping["Сделка"] = mapping["Сделка"].astype(str).str.strip()
-    mapping["MAWB"] = mapping["MAWB"].astype(str).str.replace(r"\D", "", regex=True)
+    mapping["MAWB"] = mapping["MAWB"].map(normalize_mawb)
     mapping["api_amount"] = pd.to_numeric(mapping["api_amount"], errors="coerce")
-    mapping = mapping[mapping["MAWB"].str.fullmatch(r"\d{11}")]
+    mapping = mapping[mapping["MAWB"].str.fullmatch(r"\d{11}|[A-Z0-9]{8,20}")]
     mapping = mapping.drop_duplicates(subset=["MAWB"], keep="first")
     return mapping.reset_index(drop=True)
 
