@@ -19,6 +19,14 @@ SETTLEMENT_LINE_PATTERN = re.compile(
     r"(?P<mawb>\d{3}\s+\d{4}\s+\d{4})"
 )
 
+SETTLEMENT_BLOCK_PATTERN = re.compile(
+    r"(?P<deal>\d{3,5}/C/\d{4}).{0,120}?"
+    r"(?P<date>\d{2}\.\d{2}\.\d{4}).{0,200}?"
+    r"(?P<amount>[\[\(]?\s*(?:\d{1,3}(?:[\s\u00A0,\.]\d{3})+|\d+)[\.,]\s*\d{2}).{0,120}?"
+    r"(?P<mawb>\d{3}\s+\d{4}\s+\d{4})",
+    re.DOTALL,
+)
+
 
 
 def find_pdf_in_directory(directory: Path) -> Path:
@@ -218,13 +226,16 @@ def extract_inc_and_mawb_from_tokens(
 
 def extract_settlement_rows_from_text(text: str, page_number: int) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    for line in text.splitlines():
-        line_upper = line.upper()
-        match = SETTLEMENT_LINE_PATTERN.search(line_upper)
+    text_upper = text.upper().replace("|", " ")
+    text_upper = re.sub(r"([\.,]\d)\s+(\d)", r"\1\2", text_upper)
+    seen_pairs: set[tuple[str, str]] = set()
+
+    for line in text_upper.splitlines():
+        match = SETTLEMENT_LINE_PATTERN.search(line)
         if not match:
             continue
 
-        raw_amount = re.sub(r"\s+", "", match.group("amount"))
+        raw_amount = re.sub(r"\s+", "", match.group("amount").replace("[", "").replace("(", ""))
         if "," in raw_amount and "." in raw_amount:
             decimal_sep = "," if raw_amount.rfind(",") > raw_amount.rfind(".") else "."
             thousands_sep = "." if decimal_sep == "," else ","
@@ -243,6 +254,48 @@ def extract_settlement_rows_from_text(text: str, page_number: int) -> list[dict[
         mawb_value = re.sub(r"\D", "", match.group("mawb"))
         if len(mawb_value) != 11:
             continue
+
+        row_key = (normalized_amount, mawb_value)
+        if row_key in seen_pairs:
+            continue
+        seen_pairs.add(row_key)
+
+        rows.append(
+            {
+                "page": page_number,
+                "inc(a)": normalized_amount,
+                "MAWB": mawb_value,
+            }
+        )
+
+    if rows:
+        return rows
+
+    for match in SETTLEMENT_BLOCK_PATTERN.finditer(text_upper):
+        raw_amount = re.sub(r"\s+", "", match.group("amount").replace("[", "").replace("(", ""))
+        if "," in raw_amount and "." in raw_amount:
+            decimal_sep = "," if raw_amount.rfind(",") > raw_amount.rfind(".") else "."
+            thousands_sep = "." if decimal_sep == "," else ","
+            normalized_amount = raw_amount.replace(thousands_sep, "")
+            normalized_amount = normalized_amount.replace(decimal_sep, ".")
+        elif "," in raw_amount:
+            normalized_amount = raw_amount.replace(".", "")
+            normalized_amount = normalized_amount.replace(",", ".")
+        else:
+            if raw_amount.count(".") > 1:
+                parts = raw_amount.split(".")
+                normalized_amount = "".join(parts[:-1]) + "." + parts[-1]
+            else:
+                normalized_amount = raw_amount
+
+        mawb_value = re.sub(r"\D", "", match.group("mawb"))
+        if len(mawb_value) != 11:
+            continue
+
+        row_key = (normalized_amount, mawb_value)
+        if row_key in seen_pairs:
+            continue
+        seen_pairs.add(row_key)
 
         rows.append(
             {
@@ -285,9 +338,10 @@ def extract_pdf_to_dataframe(
 
         rows.extend(extract_inc_and_mawb_from_tokens(tokens, page_index + 1))
 
-    if not rows:
+    if len(rows) < 2:
         # Fallback for settlement-style PDFs where row text is better recognized
         # as whole lines than as column headers/tokens.
+        rows = []
         fallback_rotation = rotation
         fallback_scale = max(scale, 3.0)
         for page_index in range(len(document)):
