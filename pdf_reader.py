@@ -433,6 +433,20 @@ def extract_table_rows_from_text(text: str, page_number: int) -> list[dict[str, 
 
             amounts = [normalize_amount_text(m.group(0)) for m in amount_pattern.finditer(amount_segment)]
             amounts = [value for value in amounts if not is_date_like_amount(value)]
+
+            if not amounts:
+                # OCR fallback: amount can lose decimal separator, e.g. "5 94" instead of "594.00".
+                split_match = re.match(r"\s*(\d)\s+(\d{2,3})\b", amount_segment)
+                if split_match:
+                    candidate = f"{split_match.group(1)}{split_match.group(2)}.00"
+                    amounts = [candidate]
+
+            if not amounts:
+                # Last resort: pick first integer-like amount right after date.
+                int_match = re.match(r"\s*(\d{2,4})\b", amount_segment)
+                if int_match:
+                    amounts = [f"{int_match.group(1)}.00"]
+
             if not amounts:
                 continue
 
