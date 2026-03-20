@@ -401,6 +401,8 @@ def extract_pdf_to_dataframe(
     df["inc(a)"] = df["inc(a)"].map(lambda value: f"{value:.2f}")
     df["MAWB"] = df["MAWB"].astype(str).str.replace(r"\D", "", regex=True)
     df = df[df["MAWB"].str.fullmatch(r"\d{11}")]
+    # OCR can duplicate the same logical row; keep unique MAWB+amount pairs.
+    df = df.drop_duplicates(subset=["MAWB", "inc(a)"], keep="first")
     return df.reset_index(drop=True)
 
 
