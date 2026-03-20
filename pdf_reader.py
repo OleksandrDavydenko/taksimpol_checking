@@ -429,42 +429,61 @@ def extract_table_rows_from_text(text: str, page_number: int) -> list[dict[str, 
         if not re.search(r"\d{3,5}/C/\d{4}", line):
             continue
 
+        date_matches = list(re.finditer(r"\d{2}\.\d{2}\.\d{4}", line))
+        if not date_matches:
+            continue
+
+        post_date_segment = line[date_matches[-1].end():]
+        post_date_segment = re.sub(r"\d{3,5}\s*/\s*C\s*/\s*\d{4}", " ", post_date_segment)
+        base_amounts = [normalize_amount_text(m.group(0)) for m in amount_pattern.finditer(post_date_segment)]
+        base_amounts = [value for value in base_amounts if not is_date_like_amount(value)]
+
         mawb_candidates = list(DIGIT_MAWB_PATTERN.finditer(line)) + list(ALNUM_MAWB_PATTERN.finditer(line))
-        for mawb_match in sorted(mawb_candidates, key=lambda m: m.start()):
-            mawb = extract_mawb_from_text(mawb_match.group(0))
-            if not mawb:
+        if mawb_candidates:
+            for mawb_match in sorted(mawb_candidates, key=lambda m: m.start()):
+                mawb = extract_mawb_from_text(mawb_match.group(0))
+                if not mawb:
+                    continue
+
+                prefix = line[:mawb_match.start()]
+                prefix_dates = list(re.finditer(r"\d{2}\.\d{2}\.\d{4}", prefix))
+                amount_segment = prefix[prefix_dates[-1].end():] if prefix_dates else prefix
+                amount_segment = re.sub(r"\d{3,5}\s*/\s*C\s*/\s*\d{4}", " ", amount_segment)
+
+                amounts = [normalize_amount_text(m.group(0)) for m in amount_pattern.finditer(amount_segment)]
+                amounts = [value for value in amounts if not is_date_like_amount(value)]
+
+                if not amounts:
+                    # OCR fallback: amount can lose decimal separator, e.g. "5 94" instead of "594.00".
+                    split_match = re.match(r"\s*(\d)\s+(\d{2,3})\b", amount_segment)
+                    if split_match:
+                        candidate = f"{split_match.group(1)}{split_match.group(2)}.00"
+                        amounts = [candidate]
+
+                if not amounts:
+                    # Last resort: pick first integer-like amount right after date.
+                    int_match = re.match(r"\s*(\d{2,4})\b", amount_segment)
+                    if int_match:
+                        amounts = [f"{int_match.group(1)}.00"]
+
+                if not amounts:
+                    continue
+
+                amount = amounts[-1]
+                key = (amount, mawb)
+                if key in seen_pairs:
+                    continue
+                seen_pairs.add(key)
+                rows.append({"page": page_number, "inc(a)": amount, "MAWB": mawb})
+        else:
+            if not base_amounts:
                 continue
-
-            prefix = line[:mawb_match.start()]
-            date_matches = list(re.finditer(r"\d{2}\.\d{2}\.\d{4}", prefix))
-            amount_segment = prefix[date_matches[-1].end():] if date_matches else prefix
-            amount_segment = re.sub(r"\d{3,5}\s*/\s*C\s*/\s*\d{4}", " ", amount_segment)
-
-            amounts = [normalize_amount_text(m.group(0)) for m in amount_pattern.finditer(amount_segment)]
-            amounts = [value for value in amounts if not is_date_like_amount(value)]
-
-            if not amounts:
-                # OCR fallback: amount can lose decimal separator, e.g. "5 94" instead of "594.00".
-                split_match = re.match(r"\s*(\d)\s+(\d{2,3})\b", amount_segment)
-                if split_match:
-                    candidate = f"{split_match.group(1)}{split_match.group(2)}.00"
-                    amounts = [candidate]
-
-            if not amounts:
-                # Last resort: pick first integer-like amount right after date.
-                int_match = re.match(r"\s*(\d{2,4})\b", amount_segment)
-                if int_match:
-                    amounts = [f"{int_match.group(1)}.00"]
-
-            if not amounts:
-                continue
-
-            amount = amounts[-1]
-            key = (amount, mawb)
+            amount = base_amounts[0]
+            key = (amount, "")
             if key in seen_pairs:
                 continue
             seen_pairs.add(key)
-            rows.append({"page": page_number, "inc(a)": amount, "MAWB": mawb})
+            rows.append({"page": page_number, "inc(a)": amount, "MAWB": ""})
 
     return rows
 
