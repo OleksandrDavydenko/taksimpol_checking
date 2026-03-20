@@ -28,6 +28,10 @@ SETTLEMENT_BLOCK_PATTERN = re.compile(
 
 DIGIT_MAWB_PATTERN = re.compile(r"\b\d{3}\s+\d{4}\s+\d{4}\b")
 ALNUM_MAWB_PATTERN = re.compile(r"\b[A-Z]{2,5}\s+[A-Z0-9]{2,8}\s+\d{3,6}\b")
+TABLE_ROW_PATTERN = re.compile(
+    r"(?P<amount>\d{1,3}(?:[\s\u00A0,\.]\d{3})*[\.,]\d{2}).{0,100}?"
+    r"(?P<mawb>(?:\d{3}\s+\d{4}\s+\d{4}|[A-Z]{2,5}\s+[A-Z0-9]{2,8}\s+\d{3,6}))"
+)
 
 
 
@@ -61,6 +65,30 @@ def extract_mawb_from_text(value: str) -> str:
         return normalize_mawb(alnum_match.group(0))
 
     return ""
+
+
+def normalize_amount_text(raw_amount: str) -> str:
+    raw_amount = re.sub(r"\s+", "", raw_amount)
+    if "," in raw_amount and "." in raw_amount:
+        decimal_sep = "," if raw_amount.rfind(",") > raw_amount.rfind(".") else "."
+        thousands_sep = "." if decimal_sep == "," else ","
+        normalized_amount = raw_amount.replace(thousands_sep, "")
+        normalized_amount = normalized_amount.replace(decimal_sep, ".")
+    elif "," in raw_amount:
+        normalized_amount = raw_amount.replace(".", "")
+        normalized_amount = normalized_amount.replace(",", ".")
+    else:
+        if raw_amount.count(".") > 1:
+            parts = raw_amount.split(".")
+            normalized_amount = "".join(parts[:-1]) + "." + parts[-1]
+        else:
+            normalized_amount = raw_amount
+    return normalized_amount
+
+
+def row_quality(rows: list[dict[str, object]]) -> tuple[int, int]:
+    mawb_filled = sum(1 for row in rows if str(row.get("MAWB", "")).strip())
+    return mawb_filled, len(rows)
 
 
 def run_ocr(image, psm: int = 11) -> list[dict[str, float | str]]:
@@ -350,6 +378,31 @@ def extract_settlement_rows_from_text(text: str, page_number: int) -> list[dict[
     return rows
 
 
+def extract_table_rows_from_text(text: str, page_number: int) -> list[dict[str, object]]:
+    text_upper = text.upper().replace("|", " ")
+    rows: list[dict[str, object]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+
+    for line in text_upper.splitlines():
+        if "RAZEM" in line or "TOTAL" in line or "SUMA" in line:
+            continue
+        if not re.search(r"\d{3,5}/C/\d{4}", line):
+            continue
+
+        for match in TABLE_ROW_PATTERN.finditer(line):
+            amount = normalize_amount_text(match.group("amount"))
+            mawb = extract_mawb_from_text(match.group("mawb"))
+            if not mawb:
+                continue
+            key = (amount, mawb)
+            if key in seen_pairs:
+                continue
+            seen_pairs.add(key)
+            rows.append({"page": page_number, "inc(a)": amount, "MAWB": mawb})
+
+    return rows
+
+
 def prepare_extracted_dataframe(rows: list[dict[str, object]]) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame(columns=["inc(a)", "MAWB"])
@@ -465,10 +518,12 @@ def extract_pdf_to_dataframe(
                         config=f"--oem 3 --psm {fallback_psm}",
                         timeout=40,
                     )
-                    parsed_rows = extract_settlement_rows_from_text(text, page_index + 1)
-                    if len(parsed_rows) > len(candidate_rows):
+                    settlement_rows = extract_settlement_rows_from_text(text, page_index + 1)
+                    table_rows = extract_table_rows_from_text(text, page_index + 1)
+                    parsed_rows = table_rows if row_quality(table_rows) > row_quality(settlement_rows) else settlement_rows
+                    if row_quality(parsed_rows) > row_quality(candidate_rows):
                         candidate_rows = parsed_rows
-                if len(candidate_rows) > len(page_rows):
+                if row_quality(candidate_rows) > row_quality(page_rows):
                     page_rows = candidate_rows
                     best_rotation = candidate_rotation
 
@@ -487,10 +542,12 @@ def extract_pdf_to_dataframe(
                             config=f"--oem 3 --psm {fallback_psm}",
                             timeout=40,
                         )
-                        parsed_rows = extract_settlement_rows_from_text(text, page_index + 1)
-                        if len(parsed_rows) > len(candidate_rows):
+                        settlement_rows = extract_settlement_rows_from_text(text, page_index + 1)
+                        table_rows = extract_table_rows_from_text(text, page_index + 1)
+                        parsed_rows = table_rows if row_quality(table_rows) > row_quality(settlement_rows) else settlement_rows
+                        if row_quality(parsed_rows) > row_quality(candidate_rows):
                             candidate_rows = parsed_rows
-                    if len(candidate_rows) > len(page_rows):
+                    if row_quality(candidate_rows) > row_quality(page_rows):
                         page_rows = candidate_rows
                         best_rotation = candidate_rotation
 
