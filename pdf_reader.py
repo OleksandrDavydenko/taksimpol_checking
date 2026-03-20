@@ -67,6 +67,14 @@ def extract_mawb_from_text(value: str) -> str:
     return ""
 
 
+def extract_digit_mawb_from_text(value: str) -> str:
+    upper = (value or "").upper()
+    digit_match = DIGIT_MAWB_PATTERN.search(upper)
+    if digit_match:
+        return normalize_mawb(digit_match.group(0))
+    return ""
+
+
 def normalize_amount_text(raw_amount: str) -> str:
     original = (raw_amount or "").strip()
     bleed_match = re.fullmatch(r"(\d{2})\s+(\d{3}[\.,]\d{2})", original)
@@ -350,7 +358,7 @@ def extract_settlement_rows_from_text(text: str, page_number: int) -> list[dict[
                 normalized_amount = raw_amount
 
         mawb_group = match.group("mawb") or ""
-        mawb_value = extract_mawb_from_text(mawb_group or line)
+        mawb_value = extract_mawb_from_text(mawb_group) if mawb_group else extract_digit_mawb_from_text(line)
         if not mawb_value and is_date_like_amount(normalized_amount):
             continue
         if not mawb_value and normalized_amount in total_amounts:
@@ -387,7 +395,7 @@ def extract_settlement_rows_from_text(text: str, page_number: int) -> list[dict[
                 normalized_amount = raw_amount
 
         mawb_group = match.group("mawb") or ""
-        mawb_value = extract_mawb_from_text(mawb_group or match.group(0))
+        mawb_value = extract_mawb_from_text(mawb_group) if mawb_group else extract_digit_mawb_from_text(match.group(0))
         if not mawb_value and is_date_like_amount(normalized_amount):
             continue
         if not mawb_value and normalized_amount in total_amounts:
@@ -640,10 +648,19 @@ def extract_pdf_to_dataframe(
 
     primary_score = dataframe_quality(primary_df)
     fallback_score = dataframe_quality(fallback_df)
+    selected_df = fallback_df if fallback_score > primary_score else primary_df
+    other_df = primary_df if fallback_score > primary_score else fallback_df
 
-    if fallback_score > primary_score:
-        return fallback_df
-    return primary_df
+    if not other_df.empty:
+        missing_empty_rows = other_df[
+            other_df["MAWB"].eq("")
+            & ~other_df["inc(a)"].isin(selected_df["inc(a)"])
+        ]
+        if not missing_empty_rows.empty:
+            selected_df = pd.concat([selected_df, missing_empty_rows], ignore_index=True)
+            selected_df = selected_df.drop_duplicates(subset=["inc(a)", "MAWB"], keep="first")
+
+    return selected_df.reset_index(drop=True)
 
 
 def main() -> int:
