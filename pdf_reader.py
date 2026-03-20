@@ -350,6 +350,61 @@ def extract_settlement_rows_from_text(text: str, page_number: int) -> list[dict[
     return rows
 
 
+def prepare_extracted_dataframe(rows: list[dict[str, object]]) -> pd.DataFrame:
+    if not rows:
+        return pd.DataFrame(columns=["inc(a)", "MAWB"])
+
+    df = pd.DataFrame(rows)
+    if "page" not in df.columns:
+        df["page"] = 0
+    df = df[["page", "inc(a)", "MAWB"]]
+    df = df.replace("", pd.NA)
+    df = df.dropna(subset=["inc(a)"])
+    if df.empty:
+        return pd.DataFrame(columns=["inc(a)", "MAWB"])
+
+    df["inc(a)"] = df["inc(a)"].astype(str).str.replace(",", ".", regex=False)
+    df["inc(a)"] = pd.to_numeric(df["inc(a)"], errors="coerce")
+    df = df.dropna(subset=["inc(a)"])
+    if df.empty:
+        return pd.DataFrame(columns=["inc(a)", "MAWB"])
+
+    # Remove summary-total rows (e.g. "razem") that can be OCR'd as regular data rows.
+    if len(df) >= 8:
+        total_like_indexes: list[int] = []
+        for idx in df.index[df["MAWB"].fillna("").eq("")]:
+            current_value = float(df.at[idx, "inc(a)"])
+            others_sum = float(df.loc[df.index != idx, "inc(a)"].sum())
+            if abs(others_sum - current_value) <= 0.05:
+                total_like_indexes.append(idx)
+        if total_like_indexes:
+            df = df.drop(index=total_like_indexes)
+
+    # Safety net: drop a likely total row when it has empty MAWB and the amount
+    # is an extreme outlier compared to the next largest extracted amount.
+    if len(df) >= 8:
+        empty_mawb_df = df[df["MAWB"].fillna("").eq("")]
+        if not empty_mawb_df.empty:
+            sorted_amounts = df["inc(a)"].sort_values(ascending=False).tolist()
+            if len(sorted_amounts) >= 2:
+                max_amount = float(sorted_amounts[0])
+                second_max = float(sorted_amounts[1])
+                if second_max > 0 and max_amount >= second_max * 2.5:
+                    df = df[~(df["MAWB"].fillna("").eq("") & (df["inc(a)"] == max_amount))]
+
+    df["inc(a)"] = df["inc(a)"].map(lambda value: f"{value:.2f}")
+    df["MAWB"] = df["MAWB"].fillna("").astype(str).map(normalize_mawb)
+    df = df[df["MAWB"].eq("") | df["MAWB"].str.fullmatch(r"\d{11}|[A-Z0-9]{8,20}")]
+    if df.empty:
+        return pd.DataFrame(columns=["inc(a)", "MAWB"])
+
+    key = df["page"].astype(str) + "|" + df["inc(a)"]
+    keys_with_mawb = set(key[df["MAWB"].ne("")].tolist())
+    df = df[~(df["MAWB"].eq("") & key.isin(keys_with_mawb))]
+    df = df.drop_duplicates(subset=["page", "MAWB", "inc(a)"], keep="first")
+    return df[["inc(a)", "MAWB"]].reset_index(drop=True)
+
+
 def extract_pdf_to_dataframe(
     pdf_path: Path,
     scale: float = 2.0,
@@ -443,53 +498,15 @@ def extract_pdf_to_dataframe(
 
             fallback_rows.extend(page_rows)
 
-    rows = fallback_rows if len(fallback_rows) > len(primary_rows) else primary_rows
+    primary_df = prepare_extracted_dataframe(primary_rows)
+    fallback_df = prepare_extracted_dataframe(fallback_rows)
 
-    if not rows:
-        return pd.DataFrame(columns=["inc(a)", "MAWB"])
+    primary_score = (int(primary_df["MAWB"].ne("").sum()), len(primary_df))
+    fallback_score = (int(fallback_df["MAWB"].ne("").sum()), len(fallback_df))
 
-    df = pd.DataFrame(rows)
-    if "page" not in df.columns:
-        df["page"] = 0
-    df = df[["page", "inc(a)", "MAWB"]]
-    df = df.replace("", pd.NA)
-    df = df.dropna(subset=["inc(a)"])
-    df["inc(a)"] = df["inc(a)"].astype(str).str.replace(",", ".", regex=False)
-    df["inc(a)"] = pd.to_numeric(df["inc(a)"], errors="coerce")
-    df = df.dropna(subset=["inc(a)"])
-
-    # Remove summary-total rows (e.g. "razem") that can be OCR'd as regular data rows.
-    if len(df) >= 8:
-        total_like_indexes: list[int] = []
-        for idx in df.index[df["MAWB"].fillna("").eq("")]:
-            current_value = float(df.at[idx, "inc(a)"])
-            others_sum = float(df.loc[df.index != idx, "inc(a)"].sum())
-            if abs(others_sum - current_value) <= 0.05:
-                total_like_indexes.append(idx)
-        if total_like_indexes:
-            df = df.drop(index=total_like_indexes)
-
-    # Safety net: drop a likely total row when it has empty MAWB and the amount
-    # is an extreme outlier compared to the next largest extracted amount.
-    if len(df) >= 8:
-        empty_mawb_df = df[df["MAWB"].fillna("").eq("")]
-        if not empty_mawb_df.empty:
-            sorted_amounts = df["inc(a)"].sort_values(ascending=False).tolist()
-            if len(sorted_amounts) >= 2:
-                max_amount = float(sorted_amounts[0])
-                second_max = float(sorted_amounts[1])
-                if second_max > 0 and max_amount >= second_max * 2.5:
-                    df = df[~(df["MAWB"].fillna("").eq("") & (df["inc(a)"] == max_amount))]
-
-    df["inc(a)"] = df["inc(a)"].map(lambda value: f"{value:.2f}")
-    df["MAWB"] = df["MAWB"].fillna("").astype(str).map(normalize_mawb)
-    df = df[df["MAWB"].eq("") | df["MAWB"].str.fullmatch(r"\d{11}|[A-Z0-9]{8,20}")]
-    key = df["page"].astype(str) + "|" + df["inc(a)"]
-    keys_with_mawb = set(key[df["MAWB"].ne("")].tolist())
-    df = df[~(df["MAWB"].eq("") & key.isin(keys_with_mawb))]
-    # OCR can duplicate the same logical row; keep unique MAWB+amount pairs.
-    df = df.drop_duplicates(subset=["page", "MAWB", "inc(a)"], keep="first")
-    return df[["inc(a)", "MAWB"]].reset_index(drop=True)
+    if fallback_score > primary_score:
+        return fallback_df
+    return primary_df
 
 
 def main() -> int:
