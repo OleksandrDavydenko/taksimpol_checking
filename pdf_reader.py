@@ -98,7 +98,10 @@ def extract_loose_digit_mawb_from_text(value: str) -> str:
 def normalize_amount_text(raw_amount: str) -> str:
     original = (raw_amount or "").strip()
     bleed_match = re.fullmatch(r"(\d{2})\s+(\d{3}[\.,]\d{2})", original)
-    if bleed_match and 20 <= int(bleed_match.group(1)) <= 39:
+    # Year-bleed safeguard: OCR can prepend "25" (from 2025) to amount,
+    # e.g. "25 423,00" -> "423,00". Keep this narrow to avoid dropping
+    # valid leading digits (e.g. "31 125,00" should not become "125,00").
+    if bleed_match and bleed_match.group(1) == "25":
         original = bleed_match.group(2)
 
     raw_amount = re.sub(r"\s+", "", original)
