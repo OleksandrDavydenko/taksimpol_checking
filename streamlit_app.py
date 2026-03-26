@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 from pathlib import Path
 import tempfile
+from typing import Callable
 
 import pandas as pd
 import requests
@@ -38,13 +39,20 @@ def build_excel_bytes(df: pd.DataFrame) -> bytes:
 def analyze_pdf(
     pdf_bytes: bytes,
     table_name: str,
+    progress_cb: Callable[[str], None] | None = None,
 ) -> tuple[pd.DataFrame, str | None]:
+    def report(message: str) -> None:
+        if progress_cb:
+            progress_cb(message)
+
     temp_path: Path | None = None
     try:
+        report("Підготовка вхідного PDF файлу...")
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp.write(pdf_bytes)
             temp_path = Path(tmp.name)
 
+        report("Обробка PDF (OCR та витяг рядків)...")
         pdf_df = extract_pdf_to_dataframe(
             pdf_path=temp_path,
             scale=DEFAULT_OCR_SETTINGS.scale,
@@ -59,6 +67,7 @@ def analyze_pdf(
             )
 
         try:
+            report("Виконую запит до Power BI API...")
             api_df = read_powerbi_table(table_name)
         except RuntimeError as error:
             return pd.DataFrame(), f"Помилка налаштування API: {error}"
@@ -74,11 +83,14 @@ def analyze_pdf(
             return pd.DataFrame(), "Power BI API повернуло 0 рядків для звірки."
 
         try:
+            report("Підготовка даних API для звірки...")
             api_map = build_api_mapping(api_df)
         except ValueError as error:
             return pd.DataFrame(), f"Некоректна структура даних API: {error}"
 
+        report("Порівнюю дані PDF з API...")
         result_df = compare_and_enrich(pdf_df, api_map)
+        report("Формую фінальну таблицю результатів...")
         return result_df, None
     except Exception as error:
         return pd.DataFrame(), f"Помилка під час аналізу: {error}"
@@ -99,11 +111,22 @@ def main() -> None:
         return
 
     if st.button("Запустити звірку", type="primary"):
-        with st.spinner("Обробляю PDF та звіряю з API..."):
+        with st.status("Запуск процесу звірки...", expanded=True) as status:
+            status.write("Перевіряю та готую вхідні дані...")
+
+            def report_step(message: str) -> None:
+                status.write(message)
+
             result_df, error_message = analyze_pdf(
                 pdf_bytes=uploaded_file.getvalue(),
                 table_name=TABLE_NAME,
+                progress_cb=report_step,
             )
+
+            if error_message:
+                status.update(label="Звірка завершилась з помилкою.", state="error")
+            else:
+                status.update(label="Звірку успішно завершено.", state="complete")
 
         if error_message:
             st.error(error_message)
