@@ -104,13 +104,35 @@ def main() -> None:
     st.title("Звірка TAKSIMPOL з даними обліку")
     st.caption("Завантажте PDF, програма витягне MAWB/суму, звірить з API та покаже результат.")
 
+    if "is_processing" not in st.session_state:
+        st.session_state["is_processing"] = False
+    if "last_result_df" not in st.session_state:
+        st.session_state["last_result_df"] = None
+    if "last_error_message" not in st.session_state:
+        st.session_state["last_error_message"] = None
+    if "pending_pdf_bytes" not in st.session_state:
+        st.session_state["pending_pdf_bytes"] = None
+
     uploaded_file = st.file_uploader("PDF файл", type=["pdf"])
 
     if uploaded_file is None:
         st.info("Оберіть PDF файл для запуску звірки.")
         return
 
-    if st.button("Запустити звірку", type="primary"):
+    run_clicked = st.button(
+        "Запустити звірку",
+        type="primary",
+        disabled=bool(st.session_state["is_processing"]),
+    )
+
+    if run_clicked and not st.session_state["is_processing"]:
+        st.session_state["is_processing"] = True
+        st.session_state["last_result_df"] = None
+        st.session_state["last_error_message"] = None
+        st.session_state["pending_pdf_bytes"] = uploaded_file.getvalue()
+        st.rerun()
+
+    if st.session_state["is_processing"]:
         with st.status("Запуск процесу звірки...", expanded=True) as status:
             status.write("Перевіряю та готую вхідні дані...")
 
@@ -118,7 +140,7 @@ def main() -> None:
                 status.write(message)
 
             result_df, error_message = analyze_pdf(
-                pdf_bytes=uploaded_file.getvalue(),
+                pdf_bytes=st.session_state["pending_pdf_bytes"] or uploaded_file.getvalue(),
                 table_name=TABLE_NAME,
                 progress_cb=report_step,
             )
@@ -128,9 +150,20 @@ def main() -> None:
             else:
                 status.update(label="Звірку успішно завершено.", state="complete")
 
-        if error_message:
-            st.error(error_message)
-            return
+        st.session_state["last_result_df"] = result_df
+        st.session_state["last_error_message"] = error_message
+        st.session_state["is_processing"] = False
+        st.session_state["pending_pdf_bytes"] = None
+        st.rerun()
+
+    result_df = st.session_state["last_result_df"]
+    error_message = st.session_state["last_error_message"]
+
+    if error_message:
+        st.error(error_message)
+        return
+
+    if isinstance(result_df, pd.DataFrame) and not result_df.empty:
 
         summary = summarize_result(result_df)
         total_count = summary["total"]
