@@ -27,6 +27,7 @@ SETTLEMENT_BLOCK_PATTERN = re.compile(
 )
 
 DIGIT_MAWB_PATTERN = re.compile(r"\b\d{3}\s+\d{4}\s+\d{4}\b")
+PARTIAL_DIGIT_MAWB_PATTERN = re.compile(r"\b\d{2}\s+\d{4}\s+\d{4}\b")
 ALNUM_MAWB_PATTERN = re.compile(r"\b[A-Z]{2,5}\s+[A-Z0-9]{2,8}\s+\d{3,6}\b")
 TABLE_ROW_PATTERN = re.compile(
     r"(?P<amount>\d{1,3}(?:[\s\u00A0,\.]\d{3})*[\.,]\d{2}).{0,100}?"
@@ -59,6 +60,10 @@ def extract_mawb_from_text(value: str) -> str:
     digit_match = DIGIT_MAWB_PATTERN.search(upper)
     if digit_match:
         return normalize_mawb(digit_match.group(0))
+
+    partial_digit_match = PARTIAL_DIGIT_MAWB_PATTERN.search(upper)
+    if partial_digit_match:
+        return normalize_mawb(partial_digit_match.group(0))
 
     alnum_match = ALNUM_MAWB_PATTERN.search(upper)
     if alnum_match:
@@ -111,7 +116,18 @@ def is_date_like_amount(value: str) -> bool:
 
 def row_quality(rows: list[dict[str, object]]) -> tuple[int, int]:
     mawb_filled = sum(1 for row in rows if str(row.get("MAWB", "")).strip())
-    return mawb_filled, len(rows)
+    valid_11 = sum(
+        1
+        for row in rows
+        if re.fullmatch(r"\d{11}", str(row.get("MAWB", "")).strip() or "")
+    )
+    partial_10 = sum(
+        1
+        for row in rows
+        if re.fullmatch(r"\d{10}", str(row.get("MAWB", "")).strip() or "")
+    )
+    # Prefer rows with more fully recognized 11-digit MAWB values.
+    return valid_11, mawb_filled - partial_10, mawb_filled, len(rows)
 
 
 def dataframe_quality(df: pd.DataFrame) -> tuple[int, int, int, int]:
@@ -435,7 +451,11 @@ def extract_table_rows_from_text(text: str, page_number: int) -> list[dict[str, 
         base_amounts = [normalize_amount_text(m.group(0)) for m in amount_pattern.finditer(post_date_segment)]
         base_amounts = [value for value in base_amounts if not is_date_like_amount(value)]
 
-        mawb_candidates = list(DIGIT_MAWB_PATTERN.finditer(line)) + list(ALNUM_MAWB_PATTERN.finditer(line))
+        mawb_candidates = (
+            list(DIGIT_MAWB_PATTERN.finditer(line))
+            + list(PARTIAL_DIGIT_MAWB_PATTERN.finditer(line))
+            + list(ALNUM_MAWB_PATTERN.finditer(line))
+        )
         if mawb_candidates:
             for mawb_match in sorted(mawb_candidates, key=lambda m: m.start()):
                 mawb = extract_mawb_from_text(mawb_match.group(0))
@@ -536,7 +556,9 @@ def prepare_extracted_dataframe(rows: list[dict[str, object]]) -> pd.DataFrame:
 
     df["inc(a)"] = df["inc(a)"].map(lambda value: f"{value:.2f}")
     df["MAWB"] = df["MAWB"].fillna("").astype(str).map(normalize_mawb)
-    df = df[df["MAWB"].eq("") | df["MAWB"].str.fullmatch(r"\d{11}|[A-Z0-9]{8,20}")]
+    # Keep 10-digit MAWB values as OCR-partial identifiers for visibility in output.
+    # They may not match API, but are useful for manual verification.
+    df = df[df["MAWB"].eq("") | df["MAWB"].str.fullmatch(r"\d{10,11}|[A-Z0-9]{8,20}")]
     if df.empty:
         return pd.DataFrame(columns=["inc(a)", "MAWB"])
 
@@ -601,37 +623,38 @@ def extract_pdf_to_dataframe(
     fallback_rows: list[dict[str, object]] = []
     if auto_rotate or len(primary_rows) < 8:
         fallback_rotation = rotation
-        fallback_scale = max(scale, 3.0)
+        fallback_scales = sorted({max(scale, 2.5), max(scale, 3.0)})
         for page_index in range(len(document)):
             page = document[page_index]
-            base_image = page.render(scale=fallback_scale).to_pil()
-
-            rotations = [fallback_rotation]
-            if page_index == 0:
-                for candidate_rotation in (0, 90, 180, 270):
-                    if candidate_rotation not in rotations:
-                        rotations.append(candidate_rotation)
-
             page_rows: list[dict[str, object]] = []
             best_rotation = fallback_rotation
-            for candidate_rotation in rotations:
-                rotated = base_image.rotate(candidate_rotation, expand=True)
-                candidate_rows: list[dict[str, object]] = []
-                for fallback_psm in (4, 6):
-                    text = pytesseract.image_to_string(
-                        rotated,
-                        lang="eng",
-                        config=f"--oem 3 --psm {fallback_psm}",
-                        timeout=40,
-                    )
-                    settlement_rows = extract_settlement_rows_from_text(text, page_index + 1)
-                    table_rows = extract_table_rows_from_text(text, page_index + 1)
-                    parsed_rows = table_rows if row_quality(table_rows) > row_quality(settlement_rows) else settlement_rows
-                    if row_quality(parsed_rows) > row_quality(candidate_rows):
-                        candidate_rows = parsed_rows
-                if row_quality(candidate_rows) > row_quality(page_rows):
-                    page_rows = candidate_rows
-                    best_rotation = candidate_rotation
+            for fallback_scale in fallback_scales:
+                base_image = page.render(scale=fallback_scale).to_pil()
+
+                rotations = [fallback_rotation]
+                if page_index == 0:
+                    for candidate_rotation in (0, 90, 180, 270):
+                        if candidate_rotation not in rotations:
+                            rotations.append(candidate_rotation)
+
+                for candidate_rotation in rotations:
+                    rotated = base_image.rotate(candidate_rotation, expand=True)
+                    candidate_rows: list[dict[str, object]] = []
+                    for fallback_psm in (4, 6):
+                        text = pytesseract.image_to_string(
+                            rotated,
+                            lang="eng",
+                            config=f"--oem 3 --psm {fallback_psm}",
+                            timeout=40,
+                        )
+                        settlement_rows = extract_settlement_rows_from_text(text, page_index + 1)
+                        table_rows = extract_table_rows_from_text(text, page_index + 1)
+                        parsed_rows = table_rows if row_quality(table_rows) > row_quality(settlement_rows) else settlement_rows
+                        if row_quality(parsed_rows) > row_quality(candidate_rows):
+                            candidate_rows = parsed_rows
+                    if row_quality(candidate_rows) > row_quality(page_rows):
+                        page_rows = candidate_rows
+                        best_rotation = candidate_rotation
 
             if not page_rows and page_index > 0:
                 # Recovery path: if chosen rotation produced no rows on later pages,
