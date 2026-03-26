@@ -669,6 +669,24 @@ def extract_pdf_to_dataframe(
     selected_df = fallback_df if fallback_score > primary_score else primary_df
     other_df = primary_df if fallback_score > primary_score else fallback_df
 
+    if not selected_df.empty and not other_df.empty:
+        # If selected OCR variant has empty MAWB for an amount, recover it from
+        # the alternative variant when there is exactly one clear candidate.
+        selected_df = selected_df.copy()
+        other_non_empty = other_df[other_df["MAWB"].ne("")]
+        if not other_non_empty.empty:
+            amount_to_unique_mawb = (
+                other_non_empty.groupby("inc(a)")["MAWB"]
+                .agg(lambda values: sorted(set(values)))
+                .to_dict()
+            )
+            empty_mask = selected_df["MAWB"].eq("")
+            for idx in selected_df[empty_mask].index:
+                amount = selected_df.at[idx, "inc(a)"]
+                candidates = amount_to_unique_mawb.get(amount, [])
+                if len(candidates) == 1:
+                    selected_df.at[idx, "MAWB"] = candidates[0]
+
     if not other_df.empty:
         missing_empty_rows = other_df[
             other_df["MAWB"].eq("")
