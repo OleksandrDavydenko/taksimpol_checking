@@ -29,6 +29,7 @@ SETTLEMENT_BLOCK_PATTERN = re.compile(
 DIGIT_MAWB_PATTERN = re.compile(r"\b\d{3}\s+\d{4}\s+\d{4}\b")
 PARTIAL_DIGIT_MAWB_PATTERN = re.compile(r"\b\d{2}\s+\d{4}\s+\d{4}\b")
 ALNUM_MAWB_PATTERN = re.compile(r"\b[A-Z]{2,5}\s+[A-Z0-9]{2,8}\s+\d{3,6}\b")
+LOOSE_DIGIT_MAWB_PATTERN = re.compile(r"(?:\d\s*){10,11}")
 TABLE_ROW_PATTERN = re.compile(
     r"(?P<amount>\d{1,3}(?:[\s\u00A0,\.]\d{3})*[\.,]\d{2}).{0,100}?"
     r"(?P<mawb>(?:\d{3}\s+\d{4}\s+\d{4}|[A-Z]{2,5}\s+[A-Z0-9]{2,8}\s+\d{3,6}))"
@@ -77,6 +78,20 @@ def extract_digit_mawb_from_text(value: str) -> str:
     digit_match = DIGIT_MAWB_PATTERN.search(upper)
     if digit_match:
         return normalize_mawb(digit_match.group(0))
+    return ""
+
+
+def extract_loose_digit_mawb_from_text(value: str) -> str:
+    # OCR can fragment MAWB into uneven spaced digits that strict patterns miss.
+    # Use rightmost 10-11 digit cluster as a conservative fallback.
+    upper = (value or "").upper()
+    matches = LOOSE_DIGIT_MAWB_PATTERN.findall(upper)
+    if not matches:
+        return ""
+    for candidate in reversed(matches):
+        normalized = normalize_mawb(candidate)
+        if len(normalized) in {10, 11}:
+            return normalized
     return ""
 
 
@@ -498,11 +513,12 @@ def extract_table_rows_from_text(text: str, page_number: int) -> list[dict[str, 
             if not base_amounts:
                 continue
             amount = base_amounts[0]
-            key = (amount, "")
+            loose_mawb = extract_loose_digit_mawb_from_text(line)
+            key = (amount, loose_mawb)
             if key in seen_pairs:
                 continue
             seen_pairs.add(key)
-            rows.append({"page": page_number, "inc(a)": amount, "MAWB": ""})
+            rows.append({"page": page_number, "inc(a)": amount, "MAWB": loose_mawb})
 
     return rows
 
