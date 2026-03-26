@@ -114,7 +114,7 @@ def is_date_like_amount(value: str) -> bool:
     return 1 <= left <= 31 and 1 <= right <= 12
 
 
-def row_quality(rows: list[dict[str, object]]) -> tuple[int, int]:
+def row_quality(rows: list[dict[str, object]]) -> tuple[int, int, int, int]:
     mawb_filled = sum(1 for row in rows if str(row.get("MAWB", "")).strip())
     valid_11 = sum(
         1
