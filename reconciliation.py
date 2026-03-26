@@ -37,6 +37,7 @@ def build_api_mapping(api_df: pd.DataFrame) -> pd.DataFrame:
     mawb_column = find_column_by_normalized_name(api_df, "MAWB")
     deal_column = find_column_by_normalized_name(api_df, "ugoda")
     amount_column = find_column_by_normalized_name(api_df, "SUM_USD")
+    payment_type_column = find_column_by_normalized_name(api_df, "PaymentTypeFromInformInvoice")
 
     if mawb_column is None:
         raise ValueError("Column 'MAWB' was not found in API data.")
@@ -45,17 +46,25 @@ def build_api_mapping(api_df: pd.DataFrame) -> pd.DataFrame:
     if amount_column is None:
         raise ValueError("Column 'SUM_USD' was not found in API data.")
 
-    mapping = api_df[[deal_column, mawb_column, amount_column]].copy()
+    base_columns = [deal_column, mawb_column, amount_column]
+    if payment_type_column is not None:
+        base_columns.append(payment_type_column)
+
+    mapping = api_df[base_columns].copy()
     mapping = mapping.rename(
         columns={
             deal_column: "Сделка",
             mawb_column: "MAWB",
             amount_column: "api_amount",
+            payment_type_column: "PaymentTypeFromInformInvoice",
         }
     )
     mapping["Сделка"] = mapping["Сделка"].astype(str).str.strip()
     mapping["MAWB"] = mapping["MAWB"].map(normalize_mawb)
     mapping["api_amount"] = pd.to_numeric(mapping["api_amount"], errors="coerce")
+    if "PaymentTypeFromInformInvoice" not in mapping.columns:
+        mapping["PaymentTypeFromInformInvoice"] = pd.NA
+
     mapping = mapping[mapping["MAWB"].str.fullmatch(r"\d{11}|[A-Z0-9]{8,20}")]
     mapping = mapping.drop_duplicates(subset=["MAWB"], keep="first")
     return mapping.reset_index(drop=True)
@@ -76,6 +85,7 @@ def compare_and_enrich(pdf_df: pd.DataFrame, api_map: pd.DataFrame) -> pd.DataFr
             "difference",
             "MAWB",
             "Сделка",
+            "PaymentTypeFromInformInvoice",
             "found_in_api",
             "amount_match",
         ]

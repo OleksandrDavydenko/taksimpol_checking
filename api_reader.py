@@ -80,7 +80,8 @@ SELECTCOLUMNS(
     '{table_name}',
     "MAWB", '{table_name}'[MAWB],
     "SUM_USD", '{table_name}'[SUM_USD],
-    "ugoda", '{table_name}'[ugoda]
+    "ugoda", '{table_name}'[ugoda],
+    "PaymentTypeFromInformInvoice", '{table_name}'[PaymentTypeFromInformInvoice]
 )
 """
 
