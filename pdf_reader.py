@@ -162,6 +162,65 @@ def dataframe_quality(df: pd.DataFrame) -> tuple[int, int, int, int]:
     return (non_date, mawb_filled, -date_like, len(df))
 
 
+def _looks_like_dropped_leading_one(short_amount: str, long_amount: str) -> bool:
+    short_digits = str(short_amount).replace(".", "")
+    long_digits = str(long_amount).replace(".", "")
+    return (
+        len(long_digits) == len(short_digits) + 1
+        and long_digits.startswith("1")
+        and long_digits[1:] == short_digits
+    )
+
+
+def recover_amounts_from_alternative(
+    selected_df: pd.DataFrame,
+    other_df: pd.DataFrame,
+) -> pd.DataFrame:
+    if selected_df.empty or other_df.empty:
+        return selected_df
+
+    selected_df = selected_df.copy()
+    selected_non_empty = selected_df[selected_df["MAWB"].ne("")]
+    other_non_empty = other_df[other_df["MAWB"].ne("")]
+    if selected_non_empty.empty or other_non_empty.empty:
+        return selected_df
+
+    selected_amount_by_mawb = (
+        selected_non_empty.groupby("MAWB")["inc(a)"]
+        .agg(lambda values: sorted(set(values)))
+        .to_dict()
+    )
+    other_amount_by_mawb = (
+        other_non_empty.groupby("MAWB")["inc(a)"]
+        .agg(lambda values: sorted(set(values)))
+        .to_dict()
+    )
+
+    for mawb, selected_amounts in selected_amount_by_mawb.items():
+        other_amounts = other_amount_by_mawb.get(mawb)
+        if not other_amounts:
+            continue
+
+        # Keep this correction narrow: only fix obvious OCR drops like
+        # 1125.00 -> 125.00 for the exact same MAWB across OCR variants.
+        for selected_amount in selected_amounts:
+            replacement = next(
+                (
+                    amount
+                    for amount in other_amounts
+                    if _looks_like_dropped_leading_one(selected_amount, amount)
+                ),
+                None,
+            )
+            if replacement is None:
+                continue
+
+            mask = (selected_df["MAWB"] == mawb) & (selected_df["inc(a)"] == selected_amount)
+            selected_df.loc[mask, "inc(a)"] = replacement
+
+    return selected_df
+
+
 def run_ocr(image, psm: int = 11) -> list[dict[str, float | str]]:
     data = pytesseract.image_to_data(
         image,
@@ -724,6 +783,8 @@ def extract_pdf_to_dataframe(
     other_df = primary_df if fallback_score > primary_score else fallback_df
 
     if not selected_df.empty and not other_df.empty:
+        selected_df = recover_amounts_from_alternative(selected_df, other_df)
+
         # If selected OCR variant has empty MAWB for an amount, recover it from
         # the alternative variant when there is exactly one clear candidate.
         selected_df = selected_df.copy()
