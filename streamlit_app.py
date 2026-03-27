@@ -116,7 +116,6 @@ def main() -> None:
         st.session_state["pending_pdf_bytes"] = None
 
     uploaded_file = st.file_uploader("PDF файл", type=["pdf"])
-    result_slot = st.empty()
 
     if uploaded_file is None:
         st.info("Оберіть PDF файл для запуску звірки.")
@@ -127,6 +126,10 @@ def main() -> None:
         type="primary",
         disabled=bool(st.session_state["is_processing"]),
     )
+
+    # Result container is intentionally placed after the action button,
+    # so the button always stays above metrics/tables.
+    result_slot = st.empty()
 
     if run_clicked and not st.session_state["is_processing"]:
         st.session_state["is_processing"] = True
