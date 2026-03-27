@@ -719,6 +719,13 @@ def extract_pdf_to_dataframe(
             f"рядків витягнуто: {len(rows)}"
         )
 
+        if auto_rotate and page_index == 0 and len(rows) == 0 and total_pages > 1:
+            report(
+                "OCR primary: на 1-й сторінці не знайдено рядків, "
+                "переходжу одразу до fallback"
+            )
+            break
+
     primary_rows = rows
 
     # Fallback for settlement-style PDFs where row text is better recognized
