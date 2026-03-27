@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 from statistics import median
 import sys
+from typing import Callable
 
 import pandas as pd
 import pypdfium2 as pdfium
@@ -682,12 +683,20 @@ def extract_pdf_to_dataframe(
     rotation: int = 270,
     auto_rotate: bool = False,
     psm: int = 11,
+    progress_cb: Callable[[str], None] | None = None,
 ) -> pd.DataFrame:
+    def report(message: str) -> None:
+        if progress_cb:
+            progress_cb(message)
+
     document = pdfium.PdfDocument(str(pdf_path))
+    total_pages = len(document)
     rows: list[dict[str, object]] = []
     detected_rotation = rotation
 
-    for page_index in range(len(document)):
+    report(f"OCR: початок обробки, сторінок: {total_pages}")
+
+    for page_index in range(total_pages):
         page = document[page_index]
         image = page.render(scale=scale).to_pil()
 
@@ -705,6 +714,10 @@ def extract_pdf_to_dataframe(
             )
 
         rows.extend(extract_inc_and_mawb_from_tokens(tokens, page_index + 1))
+        report(
+            f"OCR primary: сторінка {page_index + 1}/{total_pages}, "
+            f"рядків витягнуто: {len(rows)}"
+        )
 
     primary_rows = rows
 
@@ -712,9 +725,10 @@ def extract_pdf_to_dataframe(
     # as whole lines than as column headers/tokens.
     fallback_rows: list[dict[str, object]] = []
     if auto_rotate or len(primary_rows) < 8:
+        report("OCR fallback: запуск альтернативного розбору сторінок")
         fallback_rotation = rotation
         fallback_scales = sorted({max(scale, 2.5), max(scale, 3.0)})
-        for page_index in range(len(document)):
+        for page_index in range(total_pages):
             page = document[page_index]
             page_rows: list[dict[str, object]] = []
             best_rotation = fallback_rotation
@@ -773,6 +787,10 @@ def extract_pdf_to_dataframe(
             fallback_rotation = best_rotation
 
             fallback_rows.extend(page_rows)
+            report(
+                f"OCR fallback: сторінка {page_index + 1}/{total_pages}, "
+                f"рядків витягнуто: {len(fallback_rows)}"
+            )
 
     primary_df = prepare_extracted_dataframe(primary_rows)
     fallback_df = prepare_extracted_dataframe(fallback_rows)
@@ -781,6 +799,11 @@ def extract_pdf_to_dataframe(
     fallback_score = dataframe_quality(fallback_df)
     selected_df = fallback_df if fallback_score > primary_score else primary_df
     other_df = primary_df if fallback_score > primary_score else fallback_df
+    selected_name = "fallback" if fallback_score > primary_score else "primary"
+    report(
+        f"OCR завершено: обрано {selected_name} варіант, "
+        f"підсумково рядків: {len(selected_df)}"
+    )
 
     if not selected_df.empty and not other_df.empty:
         selected_df = recover_amounts_from_alternative(selected_df, other_df)

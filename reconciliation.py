@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import tempfile
+from typing import Callable
 
 import pandas as pd
 
@@ -107,6 +108,7 @@ def run_reconciliation(
     pdf_path: Path,
     table_name: str | None = None,
     ocr: OcrSettings = DEFAULT_OCR_SETTINGS,
+    progress_cb: Callable[[str], None] | None = None,
 ) -> pd.DataFrame:
     pdf_df = extract_pdf_to_dataframe(
         pdf_path=pdf_path,
@@ -114,6 +116,7 @@ def run_reconciliation(
         rotation=ocr.rotation,
         auto_rotate=ocr.auto_rotate,
         psm=ocr.psm,
+        progress_cb=progress_cb,
     )
     if pdf_df.empty:
         return pd.DataFrame()
@@ -130,13 +133,19 @@ def run_reconciliation_from_pdf_bytes(
     pdf_bytes: bytes,
     table_name: str,
     ocr: OcrSettings = DEFAULT_OCR_SETTINGS,
+    progress_cb: Callable[[str], None] | None = None,
 ) -> pd.DataFrame:
     temp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp.write(pdf_bytes)
             temp_path = Path(tmp.name)
-        return run_reconciliation(pdf_path=temp_path, table_name=table_name, ocr=ocr)
+        return run_reconciliation(
+            pdf_path=temp_path,
+            table_name=table_name,
+            ocr=ocr,
+            progress_cb=progress_cb,
+        )
     finally:
         if temp_path and temp_path.exists():
             temp_path.unlink(missing_ok=True)

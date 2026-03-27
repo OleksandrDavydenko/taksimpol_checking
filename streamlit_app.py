@@ -59,7 +59,9 @@ def analyze_pdf(
             rotation=DEFAULT_OCR_SETTINGS.rotation,
             auto_rotate=DEFAULT_OCR_SETTINGS.auto_rotate,
             psm=DEFAULT_OCR_SETTINGS.psm,
+            progress_cb=report,
         )
+        report(f"OCR: витягнуто рядків для звірки: {len(pdf_df)}")
         if pdf_df.empty:
             return (
                 pd.DataFrame(),
