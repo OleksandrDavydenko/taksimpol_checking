@@ -739,6 +739,10 @@ def extract_pdf_to_dataframe(
             page = document[page_index]
             page_rows: list[dict[str, object]] = []
             best_rotation = fallback_rotation
+            report(
+                f"OCR fallback: сторінка {page_index + 1}/{total_pages}, "
+                "підготовка альтернативних проходів"
+            )
             for fallback_scale in fallback_scales:
                 base_image = page.render(scale=fallback_scale).to_pil()
 
@@ -748,7 +752,14 @@ def extract_pdf_to_dataframe(
                         if candidate_rotation not in rotations:
                             rotations.append(candidate_rotation)
 
-                for candidate_rotation in rotations:
+                total_rotation_steps = len(rotations)
+
+                for rotation_step, candidate_rotation in enumerate(rotations, start=1):
+                    report(
+                        f"OCR fallback: сторінка {page_index + 1}/{total_pages}, "
+                        f"scale={fallback_scale}, крок {rotation_step}/{total_rotation_steps}, "
+                        f"rotation={candidate_rotation}"
+                    )
                     rotated = base_image.rotate(candidate_rotation, expand=True)
                     candidate_rows: list[dict[str, object]] = []
                     for fallback_psm in (4, 6):
@@ -770,9 +781,17 @@ def extract_pdf_to_dataframe(
             if not page_rows and page_index > 0:
                 # Recovery path: if chosen rotation produced no rows on later pages,
                 # quickly try other rotations for this page only.
+                report(
+                    f"OCR fallback: сторінка {page_index + 1}/{total_pages}, "
+                    "основні проходи порожні, запускаю recovery"
+                )
                 for candidate_rotation in (0, 90, 180, 270):
                     if candidate_rotation == fallback_rotation:
                         continue
+                    report(
+                        f"OCR fallback recovery: сторінка {page_index + 1}/{total_pages}, "
+                        f"rotation={candidate_rotation}"
+                    )
                     rotated = base_image.rotate(candidate_rotation, expand=True)
                     candidate_rows: list[dict[str, object]] = []
                     for fallback_psm in (4, 6):
