@@ -116,6 +116,7 @@ def main() -> None:
         st.session_state["pending_pdf_bytes"] = None
 
     uploaded_file = st.file_uploader("PDF файл", type=["pdf"])
+    result_slot = st.empty()
 
     if uploaded_file is None:
         st.info("Оберіть PDF файл для запуску звірки.")
@@ -135,6 +136,8 @@ def main() -> None:
         st.rerun()
 
     if st.session_state["is_processing"]:
+        # Clear previously rendered result tables while a new run is in progress.
+        result_slot.empty()
         with st.status("Запуск процесу звірки...", expanded=True) as status:
             status.write("Перевіряю та готую вхідні дані...")
 
@@ -166,39 +169,39 @@ def main() -> None:
         return
 
     if isinstance(result_df, pd.DataFrame) and not result_df.empty:
+        with result_slot.container():
+            summary = summarize_result(result_df)
+            total_count = summary["total"]
+            found_count = summary["found_in_api"]
+            amount_match_count = summary["amount_match"]
 
-        summary = summarize_result(result_df)
-        total_count = summary["total"]
-        found_count = summary["found_in_api"]
-        amount_match_count = summary["amount_match"]
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Всього рядків", total_count)
+            col2.metric("Знайдено MAWB в API", f"{found_count}/{total_count}")
+            col3.metric("Збіг сум", f"{amount_match_count}/{total_count}")
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Всього рядків", total_count)
-        col2.metric("Знайдено MAWB в API", f"{found_count}/{total_count}")
-        col3.metric("Збіг сум", f"{amount_match_count}/{total_count}")
+            mismatch_df = result_df[(~result_df["found_in_api"]) | (~result_df["amount_match"])].copy()
 
-        mismatch_df = result_df[(~result_df["found_in_api"]) | (~result_df["amount_match"])].copy()
+            st.subheader("Розбіжності")
+            if mismatch_df.empty:
+                st.success("Розбіжностей не знайдено.")
+            else:
+                st.dataframe(mismatch_df, use_container_width=True)
 
-        st.subheader("Розбіжності")
-        if mismatch_df.empty:
-            st.success("Розбіжностей не знайдено.")
-        else:
-            st.dataframe(mismatch_df, use_container_width=True)
+            st.subheader("Повний результат")
+            st.dataframe(
+                result_df,
+                use_container_width=True,
+                height=dataframe_height_for_rows(len(result_df)),
+            )
 
-        st.subheader("Повний результат")
-        st.dataframe(
-            result_df,
-            use_container_width=True,
-            height=dataframe_height_for_rows(len(result_df)),
-        )
-
-        excel_data = build_excel_bytes(result_df)
-        st.download_button(
-            label="Завантажити результат (XLSX)",
-            data=excel_data,
-            file_name="pdf_vs_api_result.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+            excel_data = build_excel_bytes(result_df)
+            st.download_button(
+                label="Завантажити результат (XLSX)",
+                data=excel_data,
+                file_name="pdf_vs_api_result.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
 
 
 if __name__ == "__main__":
