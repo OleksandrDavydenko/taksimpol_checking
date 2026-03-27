@@ -97,6 +97,11 @@ def extract_loose_digit_mawb_from_text(value: str) -> str:
 
 def normalize_amount_text(raw_amount: str) -> str:
     original = (raw_amount or "").strip()
+    original = re.sub(
+        r"(?<!\d)[IL\|](?=\s*\d{3}(?:[\s\u00A0,\.]\d{3})*[\.,]\d{2})",
+        "1",
+        original.upper(),
+    )
     bleed_match = re.fullmatch(r"(\d{2})\s+(\d{3}[\.,]\d{2})", original)
     # Year-bleed safeguard: OCR can prepend "25" (from 2025) to amount,
     # e.g. "25 423,00" -> "423,00". Keep this narrow to avoid dropping
@@ -293,6 +298,13 @@ def extract_inc_and_mawb_from_tokens(
         inc_text = " ".join(text for _, text in sorted(row["inc_tokens"], key=lambda t: t[0]))
         mawb_text = " ".join(
             text for _, text in sorted(row["mawb_tokens"], key=lambda t: t[0])
+        )
+        # OCR may read leading "1" as "I"/"l" in amounts like "1 125,00".
+        # Normalize only this narrow pattern before extracting the amount.
+        inc_text = re.sub(
+            r"(?<!\d)[IL\|](?=\s*\d{3}(?:[\s\u00A0,\.]\d{3})*[\.,]\d{2})",
+            "1",
+            inc_text.upper(),
         )
 
         # Support amounts like "2 549,00", "2,549.00", "2.549,00", and "549,00".
